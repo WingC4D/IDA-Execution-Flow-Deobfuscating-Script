@@ -1,297 +1,378 @@
-from Dependencies import idaapi, idc, idautils, ida_ua
-import ctypes, enum
+#It's a skill issue lol.
 
+from Dependencies import idaapi, idc, idautils, ida_ua, ida_bytes, ida_xref
+import ctypes
 
-__IS32__ = True
-__IS64__ = False
 idaapi.msg_clear()
 
+__IS32__      : bool = True
+__IS64__      : bool = False
+__JUMP_COUNT__: int  = 0x2
+__OPER_COUNT__: int  = 0x8 
+__ARITHMETIC__: list[int] = [idaapi.NN_add, idaapi.NN_sub, idaapi.NN_inc, idaapi.NN_dec, idaapi.NN_mul, idaapi.NN_div]
 
-class Flags():
+class FlagsContext:
     def __init__(self):
-        self.carry          : bool = False
-        self.parity         : bool = False
-        self.auxillary_carry: bool = False
         self.zero           : bool = False
+        self.parity         : bool = False #PF (bit 2): Parity flag - Set if the least-significant byte of the result contains an even number of bits set to 1; cleared otherwise.
+        self.auxiliary_carry: bool = False
+        self.overflow       : bool = False
+        self.direction      : bool = False
         self.sign           : bool = False
+        self.carry          : bool = False        
+        self.trap           : bool = False
+        self.interrupt      : bool = False
 
-    def __repr__(self):
-        print(f'Flag States:\tCF = {int(self.carry)}\tPF = {int(self.parity)}\tAF = {int(self.auxillary_carry)}\tZF = {int(self.zero)}\SF = {int(self.sign)}')
+    def __repr__(self)-> str: return f'Flag States:\n\t ZF = {int(self.zero)} \t PF = {int(self.parity)} \t AF = {int(self.auxiliary_carry)}\n\t OF = {int(self.overflow)} \t SF = {int(self.sign)} \t DF = {int(self.direction)}\n\t CF = {int(self.carry)} \t TF = {int(self.trap)} \t IF = {int(self.interrupt)}'
 
-class CpuContext():
-    def __init__(self):
-        try:
-            if __IS32__:
-                uint_zero: ctypes.c_uint32 = ctypes.c_uint32(0) 
+    def reset(self)->None: 
+        self.carry, self.overflow, self.sign, self.zero, self.parity = False, False, False, False, False
 
-            elif __IS64__:
-                uint_zero: ctypes.c_uint64 = ctypes.c_uint64(0) 
-
-            else:
-                raise ValueError
-        #Registers:
-            self.reg_ax = uint_zero
-            self.reg_bx = uint_zero
-            self.reg_cx = uint_zero
-            self.reg_dx = uint_zero
-            self.reg_di = uint_zero
-            self.reg_si = uint_zero
-            self.reg_bp = uint_zero
-            self.reg_sp = uint_zero
-            self.reg_ip = uint_zero
-        #Flags:
-            self.flags = Flags()
+    def set_sign(self, result: int)->None: 
+        self.sign = result & MSB_MASK != 0
         
-        except ValueError:
-            instruction_set_msg()
+    def set_carry_add(self, org_value_a: int, result: int)->None: 
+        self.carry = result < org_value_a
 
-    #def __repr__(self):
+    def set_carry_sub(self, org_value_a: int, result: int)->None: 
+        self.carry = result > org_value_a
 
+    def set_overflow_add(self, org_value_a: int, value_b: int, result: int)->None: 
+        if self._check_sign(org_value_a) == self._check_sign(value_b):
+            self.overflow = self._check_sign(value_b) != self._check_sign(result)
+        else:
+            self.overflow = False
 
-def main():
-    effective_address  : int                 = idc.here()
-    passed_instructions: list[ida_ua.insn_t] = []
-    context            : CpuContext             = CpuContext()
+    def set_overflow_sub(self, org_value_a: int, value_b: int, result: int)->None:
+        if self._check_sign(org_value_a) != self._check_sign(value_b):
+            self.overflow = self._check_sign(value_b) == self._check_sign(result)
+        else:
+            self.overflow = False
+
+    def set_parity(self, result: int)->None:
+        least_significant_byte: int = result & 0xFF
+        bits_set_to_1         : int = 0
+        curr_bit              : int = 1
+        while curr_bit <= 0x80:
+            if curr_bit & least_significant_byte:
+                bits_set_to_1 += 1
+            curr_bit <<= 1
+        self.parity = bits_set_to_1 % 2 == 0
+
+    def update(self, result: int)->None:
+        self.zero = result == 0
+        self.set_parity(result)
+        self.set_sign(result)
+
+    @staticmethod
+    def _check_sign(value)->bool: return value & MSB_MASK != 0
+            
+def instruction_set_msg()->None: return print(f'Either __IS32__ or __IS64__ must be set to "True"')
+
+try: 
+    if   __IS32__: 
+        MAX_REG_VALUE: int    = 0x00000000FFFFFFFF
+        BITS         : str    = '32'
+        __UINT__     : object = ctypes.c_uint32
+        MSB_MASK     : int    = 0x0000000080000000
+    elif __IS64__:
+        MAX_REG_VALUE: int    = 0xFFFFFFFFFFFFFFFF 
+        BITS         : str    = '64'
+        __UINT__     : object = ctypes.c_uint64
+        MSB_MASK     : int    = 0x8000000000000000
+    else:
+        raise ValueError
+except ValueError: 
+    instruction_set_msg()
+    exit(-1)
+
+class CpuContext:
+    def __init__(self):       
+    #Registers:
+        self.registers: dict = {
+            idautils.procregs.eax.reg: __UINT__(0),
+            idautils.procregs.ebx.reg: __UINT__(0),
+            idautils.procregs.ecx.reg: __UINT__(0),
+            idautils.procregs.edx.reg: __UINT__(0),
+            idautils.procregs.edi.reg: __UINT__(0),
+            idautils.procregs.esi.reg: __UINT__(0),
+            idautils.procregs.ebp.reg: __UINT__(0),
+            idautils.procregs.esp.reg: __UINT__(0),
+            idautils.procregs.eip.reg: __UINT__(0)
+        }
+    #Flags:
+        self.flags: FlagsContext = FlagsContext()     
+    
+    @property
+    def reg_ax(self):
+        return self.registers[idautils.procregs.eax.reg].value
+    @property
+    def reg_bx(self):
+        return self.registers[idautils.procregs.ebx.reg].value
+    @property
+    def reg_cx(self):
+        return self.registers[idautils.procregs.ecx.reg].value
+    @property
+    def reg_dx(self):
+        return self.registers[idautils.procregs.edx.reg].value
+    @property
+    def reg_di(self):
+        return self.registers[idautils.procregs.edi.reg].value
+    @property
+    def reg_si(self):
+        return self.registers[idautils.procregs.esi.reg].value
+    @property
+    def reg_bp(self):
+        return self.registers[idautils.procregs.ebp.reg].value
+    @property
+    def reg_sp(self):
+        return self.registers[idautils.procregs.esp.reg].value
+    @property
+    def reg_ip(self):
+        return self.registers[idautils.procregs.eip.reg].value
+    
+    def __repr__(self)->str: 
+        return f'############\n\nCPU Context:\n\n- Architecture:\n\t {BITS}bit Intel || AMD\n\n- Integer Registers:\n\t Reg_AX: {hex(self.reg_ax)}\n\t Reg_BX: {hex(self.reg_bx)}\n\t Reg_CX: {hex(self.reg_cx)}\n\t Reg_DX: {hex(self.reg_dx)}\n\t Reg_DI: {hex(self.reg_di)}\n\t Reg_SI: {hex(self.reg_si)}\n\t Reg_BP: {hex(self.reg_bp)}\n\t Reg_SP: {hex(self.reg_sp)}\n\t Reg_IP: {hex(self.reg_ip)}\n\n- {self.flags}\n\n############'
+
+def main(effective_address: idaapi.ea_t = idc.here(), context: CpuContext  = CpuContext())->None:
+    jump_count      : int         = 0
+    iteration_count : int         = 1
+    frame_start     : idaapi.ea_t = effective_address
     while True:
-        instruction: ida_ua.insn_t = idautils.DecodeInstruction(effective_address)
+        instruction       : ida_ua.insn_t     = idautils.DecodeInstruction(effective_address)
+        #operand_objects   : list[ida_ua.op_t] = get_operand_objects(instruction) 
+        #operand_constatnts: list[int]         = get_operands_types(operand_objects)
+        context.registers[idautils.procregs.eip.reg].value = effective_address 
         
-        if not instruction:
-            print("Not an instruction")
+        if not instruction or not ida_bytes.is_code(ida_bytes.get_flags(effective_address)) or jump_count >= __JUMP_COUNT__:
+            if not instruction:
+                print(f'Not an instruction @{effective_address:x}') 
+                break
+            
+            elif jump_count >= __JUMP_COUNT__:
+                print(f'Taken {__JUMP_COUNT__} jumps, all finished.')
+                break
+            
+            print(f'Not code @{effective_address:x}')
             break
+        
+        elif instruction.itype == idaapi.NN_call:
+            execution_flow_shift_msg(instruction, context)
+            effective_address = instruction.Op1.addr
+            idc.jumpto(instruction.Op1.addr)
+            jump_count += 1
+            continue
 
-        elif handle_instruction(instruction, passed_instructions, context):
-            if passed_instructions:
-                print(f'Jumping to a found handled instruction @{effective_address:x}') 
-                
-            break
+        elif is_non_cond_jump(instruction):
+            execution_flow_shift_msg(instruction, context)
+            effective_address, frame_start = instruction.Op1.addr, instruction.Op1.addr
+            idc.jumpto(instruction.Op1.addr)
+            jump_count += 1
+            continue
         
-        else: 
-            retrive_cpu_state(instruction, context)
-            effective_address += instruction.size
+        elif is_cond_jump(instruction):
+            if eval_cond_jump(instruction.itype, context.flags):
+                if is_junk_condition(effective_address, frame_start): print(f'[i] Conditional jump @{effective_address:x} of type: {instruction.itype:x} has been found to be junk!')
+                else: print(f'[!] Conditional jump @{effective_address:x} of type: {instruction.itype:x} has been found NOT to be junk!')
+                if is_skipped_data_junk(instruction, instruction.Op1.addr): print(f'[i] Data skipped from @{effective_address:x} to @{instruction.Op1.addr:x} has been found to be junk!')
+                else: print(f'[!] Data skipped from @{effective_address:x} to @{instruction.Op1.addr:x} has been found NOT to be junk!') 
+                idc.jumpto(instruction.Op1.addr)
+                effective_address = instruction.Op1.addr
+                frame_start = instruction.Op1.addr
+                jump_count += 1
+                continue
+                
+        elif is_arithmetic(instruction) and instruction.Op2.type == ida_ua.o_imm:
+            context.flags.reset()
+            update_reg_imm(instruction, context)
+        
+        #print(f'\nStep: {iteration_count}\n{context.flags}')
+        iteration_count += 1
+        effective_address += instruction.size 
+             
+    return
+
+def update_reg_imm(instruction: ida_ua.insn_t, context    : CpuContext)->bool:
+    operands: list[ida_ua.op_t] = get_operand_objects(instruction)
+    try: 
+        if len(operands) > 2: raise NotImplementedError
+    except NotImplementedError: print(f'Found {len(operands)} instructions, Stopping.')
+    result = False
+    #print(f'Found constant: {instruction.Op1.reg:x} @{instruction.ea:x}')
+    handle_register_value(context.registers[instruction.Op1.reg], instruction, context.flags)
+    #print(context)
+    context.flags.update(context.registers[instruction.Op1.reg].value)
+    
+    return result
+
+def handle_register_value(register: ctypes.c_uint32, instruction: ida_ua.insn_t, context_flags: FlagsContext)->None:
+    
+    org_reg_value: int = register.value
+    match instruction.itype:    
+        case idaapi.NN_mov: 
+            register.value  = instruction.Op2.value
+        
+        case idaapi.NN_add: 
+            register.value += instruction.Op2.value
+            context_flags.set_carry_add(org_reg_value, register.value)
+            context_flags.set_overflow_add(org_reg_value, instruction.Op2.value, register.value)
+
+        case idaapi.NN_sub:
+            register.value -= instruction.Op2.value
+            context_flags.set_carry_sub(org_reg_value, register.value)
+            context_flags.set_overflow_sub(org_reg_value, instruction.Op2.value, register.value)
+
+        case idaapi.NN_dec:
+            register.value -= 1        
+            context_flags.set_overflow_sub(org_reg_value, 1, register.value)
+
+        case idaapi.NN_inc:
+            register.value += 1
+            context_flags.set_overflow_add(org_reg_value, 1, register.value)
+        
+        case default:
+            print(f'Unhandled mnemonic of const {hex(instruction.itype)}')
         
     return
 
+def handle_forward_movement(instruction: ida_ua.insn_t)->bool: return idc.jumpto(instruction.Op1.addr)
 
-def handle_instruction(instruction:ida_ua.insn_t, passed_instructions: list[ida_ua.insn_t], context: CpuContext)->bool:
-    handled_instructions: list[int] = [idaapi.NN_jle, idaapi.NN_jle]
-    
-    try: 
-        if not isinstance(instruction, ida_ua.insn_t):
-            raise ValueError
-    
-    except ValueError: 
-        print("handle_instructions must have a an instruction input of type ida_ua.insn_t")
-        return False
-    
-    if not instruction.itype in handled_instructions:
-        passed_instructions.append(instruction)
-       
-        return False
-    idc.jumpto(instruction.ea)
+def unhandled_jump_msg(jump_name: str)->bool: print(f'[!] Hit an unhandled jump of type {jump_name} returning False'); return False
 
-    print(f'Jumped to: {instruction.ea}')
+def reg_msg(register_name: str, instruction: ida_ua.insn_t)->None: return print(f'Found a reference to {register_name} @{instruction.ea:x}')
 
-    
-    
-    match (instruction.itype):
-        case idaapi.NN_jz:
-            return True
-        
-        case idaapi.NN_jnz:
-            return True
-        
-        case idaapi.NN_je: 
-            return True
-        
+def cunt_msg(unhandled_flag: str)->None: return print(f'This instruction uses a {unhandled_flag}, start handling it ya cunt.')
+
+def execution_flow_shift_msg(instruction: ida_ua.insn_t, context: CpuContext)->None:
+    if instruction.itype != idaapi.NN_call: return print(f'jumped to {instruction.Op1.addr:x} from {instruction.ea:x}\n\n{context}')
+    return print(f'Called @{instruction.Op1.addr:x} from {instruction.ea:x}\n\n{context}')
+
+def contains_imm( operand_types: list[int])->bool: return ida_ua.o_imm  in operand_types
+
+def contains_near(operand_types: list[int])->bool: return idaapi.o_near in operand_types 
+
+def contains_reg( operand_types: list[int])->bool: return ida_ua.o_reg  in operand_types
+
+def eval_cond_jump(instruction_type: int, flags: FlagsContext)->bool:
+    match instruction_type:
+        case idaapi.NN_jl:
+            return flags.sign != flags.overflow
+        case idaapi.NN_jle:
+            return flags.sign != flags.overflow or flags.zero == True
+        case idaapi.NN_jnl:
+            return flags.sign == flags.overflow
+        case idaapi.NN_jnle:
+            return not flags.zero and flags.sign == flags.overflow
         case idaapi.NN_jne:
-            return True
-        
-        case idaapi.NN_jle: 
-            
-            handle_forward_address(instruction, context)
-            return True
-        
-        case idaapi.NN_jbe: 
-            return True
-        
-        case idaapi.NN_jb: 
-            return True
-        
-        case idaapi.NN_call: 
-            return True
-        
-        case defualt:
-            passed_instructions.append(instruction)
-            return False        
-    
-
-def retrive_cpu_state(instruction: ida_ua.insn_t, context: CpuContext)->None:
-    handled_menmonics: list[int] = [idaapi.NN_mov, idaapi.NN_inc, idaapi.NN_dec, idaapi.NN_add, idaapi.NN_sub]
-    """ 
-    Idea...
-    handled_operands   : list[int] = [idaapi.o_reg, idaapi.o_void]
-    """
-    
-    if instruction.itype not in handled_menmonics:
-        print(f"Found an unhandled menmonic @{instruction.ea}")
-            
-            
-        
-    if instruction.Op1.type == idaapi.o_reg or instruction.Op2.type == idaapi.o_reg:
-        get_register(context, instruction)
-
-
-def get_register(context: CpuContext, instruction: ida_ua.insn_t)->None:
-    ida_reg_consts      : idautils._procregs                       = idautils.procregs
-    register            : ctypes.c_uint32 | ctypes.c_uint64 | None = None
-    non_reg_oper_indexes: list[int]                                = []
-    reg_oper_indexes    : list[int]                                = []
-    filled_operands     : list[ida_ua.op_t]                        = []
-    
-    
-    for i, operand in enumerate(instruction):
-        if operand.type == idaapi.o_void:
-            break
-        
-        elif operand.type == idaapi.o_reg:
-            reg_oper_indexes.append(i)
-        
-        else:
-            non_reg_oper_indexes.append(i)
-        
-        filled_operands.append(operand)
-    
-    try:
-        if len(filled_operands) > 2:
-            print("UNHANLDED INSTRUCTION")
-            raise NotImplementedError
-    
-    except:
-        NotImplementedError
-    
-    reg_index    : int = reg_oper_indexes[0]
-    non_reg_index: int = non_reg_oper_indexes[0]
-
-    match instruction.Op1:
-        case ida_reg_consts.eax:
-            reg_msg("EAX", instruction)
-            register = context.reg_ax
-            handle_register_value(context.reg_ax, instruction, non_reg_index, context.flags)
-
-        case ida_reg_consts.ebx:
-            reg_msg("EBX", instruction)
-            register = context.reg_bx
-            handle_register_value(context.reg_bx, instruction, non_reg_index, context.flags)
-
-        case ida_reg_consts.ecx:
-            reg_msg("ECX", instruction)
-            register = context.reg_cx
-            handle_register_value(context.reg_cx, instruction, non_reg_index, context.flags)
-
-        case ida_reg_consts.edx:
-            reg_msg("EDX", instruction)
-            register = context.reg_dx
-            handle_register_value(context.reg_dx, instruction, non_reg_index, context.flags)
-
-
-        case ida_reg_consts.edi:
-            reg_msg("EDI", instruction)
-            handle_register_value(context.reg_di, instruction, non_reg_index, context.flags)
-            register = context.reg_di
-
-        case ida_reg_consts.esi:
-            reg_msg("ESI", instruction)
-            register = context.reg_si
-            handle_register_value(context.reg_si, instruction, non_reg_index, context.flags)
-
-        case ida_reg_consts.ebp:
-            reg_msg("EBP", instruction)
-            register = context.reg_bp
-            handle_register_value(context.reg_bp, instruction, non_reg_index, context.flags)
-
-        case ida_reg_consts.esp:
-            reg_msg("ESP", instruction)
-            register = context.reg_bp
-            handle_register_value(context.reg_sp, instruction, non_reg_index, context.flags)
-
-        case defualt:
-            print(f"This instrusction interacts with a register of constant: {hex(instruction[reg_oper_indexes[0]].reg)}")
-        
-    print(f'register current Value is {register.value:x}')
-
-    return 
-
-
-def handle_register_value(register: ctypes.c_uint32, instruction: ida_ua.insn_t, non_reg_index: int, context_flags: Flags)->None:
-    match instruction.itype:    
-        case idaapi.NN_mov:
-            register.value = instruction[non_reg_index].value
-        
-        case idaapi.NN_add:
-            register.value += instruction[non_reg_index].value
-
-        case idaapi.NN_sub:
-            if register.value < instruction[non_reg_index].value:
-                    context_flags.zero   = True
-                    register.value       = 0        
-            
-            else: 
-                register.value -= instruction[non_reg_index].value
-     
-
-def cunt_msg(unhanled_flag: str)->None:
-    print(f"This instruction uses a {unhanled_flag} flag, start handeling it ya cunt.")
-    
-
-def instruction_set_msg()->None:
-    print(f'Either __IS32__ or __IS64__ must be set to "True"')
-            
-        
-def reg_msg(register_name: str, instruction: ida_ua.insn_t)->None:
-    print(f'Found a refrence to {register_name} @{instruction.ea:x}')
-
-
-def handle_forward_address(instruction: ida_ua.insn_t, context: CpuContext)->None:
-    print(instruction.Op1.type)
-    
-    match instruction.Op1.type:
-        case idaapi.o_reg:
-            cunt_msg("register")
-            return
-        
-        case idaapi.o_mem:
-            cunt_msg("memory")
-            return
-        
-        case idaapi.o_near:
-            to_jump_addr: ida_ua.ea_t = instruction.Op1.addr
-            
-            
-            if idc.is_head(idaapi.get_flags(to_jump_addr)):
-                cleanup_range = range(instruction.ea + instruction.size, to_jump_addr)
-                
-                for byte_addr in cleanup_range:
-                    print(f'Undifining: {byte_addr:x}')
-
-                idc.jumpto(to_jump_addr)
-            
-            print(f'Jumped to: {to_jump_addr:x}') 
-
-            if idc.is_tail(idaapi.get_flags(to_jump_addr)) :
-                pass
-            else: 
-                idc.jumpto(to_jump_addr)
-            return
-        
-        case idaapi.o_far:
-            cunt_msg("far")
-            return
-        
+            return not flags.zero
+        case idaapi.NN_je:
+            return flags.zero
+        case idaapi.NN_jz:
+            return flags.zero
+        case idaapi.NN_jnz:
+            return not flags.zero
+        case idaapi.NN_jb:
+            return flags.carry
+        case idaapi.NN_jbe:
+            return flags.zero or flags.carry
+        case idaapi.NN_jnb:
+            return not flags.carry
+        case idaapi.NN_jnbe:
+            return not flags.carry and not flags.zero
+        case idaapi.NN_ja:
+            return not flags.carry and not flags.overflow
+        case idaapi.NN_jae:
+            return not flags.carry
+        case idaapi.NN_jna:
+            return flags.carry or flags.zero
+        case idaapi.NN_jnae:
+            return flags.carry
+        case idaapi.NN_jc:
+            return flags.carry
+        case idaapi.NN_jcxz: # Jump if CX is 0
+            return unhandled_jump_msg('jump cx is zero')
+        case idaapi.NN_jecxz:
+            return unhandled_jump_msg('jump if ecx zero')
+        case idaapi.NN_jrcxz:
+            return unhandled_jump_msg('jump if rcx is zero')
+        case idaapi.NN_jnc:
+            return flags.overflow
+        case idaapi.NN_jg:
+            return not flags.zero and flags.sign == flags.overflow
+        case idaapi.NN_jge:
+            return flags.sign == flags.overflow
+        case idaapi.NN_jnge:
+            return flags.zero
+        case idaapi.NN_jo:
+            return flags.overflow
+        case idaapi.NN_jno:
+            return not flags.overflow
+        case idaapi.NN_jp:
+            return flags.parity
+        case idaapi.NN_jpe:
+            return flags.parity
+        case idaapi.NN_jpo:
+            return not flags.parity
+        case idaapi.NN_jnp:
+            return not flags.parity      
+        case idaapi.NN_js:
+            return flags.sign
+        case idaapi.NN_jns:
+            return not flags.sign
         case default:
-            print("trace_cpu_flags::to be explored")
-            return
+            return False
 
+def get_operands_types(operand_objects: list[ida_ua.op_t] | None = None, instruction: ida_ua.insn_t | None = None)->list[int]:
+    try:
+        if not operand_objects:
+            if not instruction: raise TypeError
+            else: operand_objects = get_operand_objects(instruction)
+        return [operand.type for operand in operand_objects]
+    
+    except TypeError:
+        print("[x] get_operand_types::Error! No input was passed")
+        return []
+    
+def get_operand_objects(instruction: ida_ua.insn_t)->list[ida_ua.op_t]:
+    result: list[ida_ua.op_t] = []
+    for i in range (__OPER_COUNT__):
+        if instruction[i].type == idaapi.o_void: break
+        result.append(instruction[i])
+    return result 
 
-if __name__ == "__main__":
+def is_arithmetic(instruction: ida_ua.insn_t)->bool: return instruction.itype in __ARITHMETIC__
+
+def is_cond_jump(instruction: ida_ua.insn_t)->bool: return idaapi.NN_ja  <= instruction.itype <= idaapi.NN_jz
+
+def is_junk_condition(effective_address: idaapi.ea_t, eval_start: idaapi.ea_t)->bool:
+    last_instruction : ida_ua.insn_t = idautils.DecodeInstruction(idaapi.prev_head(effective_address, 0))
+    curr_instruction : ida_ua.insn_t = idautils.DecodeInstruction(eval_start)
+    case_operand     : ida_ua.op_t   = last_instruction.Op1
+    if last_instruction.Op1.type == ida_ua.o_reg and last_instruction.itype in __ARITHMETIC__ or last_instruction.itype == idaapi.NN_cmp and last_instruction.Op2 != idaapi.o_phrase:
+        const: int = case_operand.reg
+        while curr_instruction.ea <= effective_address:
+            if (curr_instruction.itype == idaapi.NN_mov
+                and curr_instruction.Op1.reg == const
+                and curr_instruction.Op2.type == idaapi.o_imm):
+                return True
+            curr_instruction = idautils.DecodeInstruction(curr_instruction.ea + curr_instruction.size)
+            
+    return False
+
+def is_non_cond_jump( instruction: ida_ua.insn_t )->bool: return idaapi.NN_jmp <= instruction.itype <= idaapi.NN_jmpshort
+
+def is_skipped_data_junk(curr_instruction: ida_ua.insn_t, destination_address: idaapi.ea_t)->bool:
+    addresses_delta: int = destination_address - curr_instruction.ea
+    if 0 > addresses_delta or addresses_delta > 0x800: return False
+    while curr_instruction.ea + curr_instruction.size <= destination_address:
+        if ida_xref.get_next_cref_to(curr_instruction.ea, ida_xref.get_first_cref_to(curr_instruction.ea)) != idc.BADADDR: return False
+        curr_instruction = idautils.DecodeInstruction(curr_instruction.ea + curr_instruction.size)
+        if not curr_instruction:
+            curr_addr = curr_instruction.ea
+            while not curr_instruction and curr_instruction.ea + curr_instruction.size <= destination_address or curr_addr + 1 <= destination_address:
+                curr_addr += 1
+                curr_instruction = idautils.DecodeInstruction(curr_addr)
+    return True
+
+if __name__ == '__main__':
     main()
-

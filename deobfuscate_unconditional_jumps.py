@@ -263,11 +263,7 @@ def eval_cond_jump(instruction_type: int, context: CpuContext)->bool:
         case idaapi.NN_jno  : return not context.flags.overflow
         
         case idaapi.NN_jns  : return not context.flags.sign
-        
-        case idaapi.NN_ja   : return not context.flags.carry and not context.flags.overflow
-        
-        case idaapi.NN_jnbe : return not context.flags.carry and not context.flags.zero
-        
+
         case idaapi.NN_jcxz : return not context.reg_cx & 0xFFFF
         
         case idaapi.NN_jecxz: return not context.reg_cx & 0xFFFFFFFF
@@ -285,6 +281,8 @@ def eval_cond_jump(instruction_type: int, context: CpuContext)->bool:
         case idaapi.NN_jnp  | idaapi.NN_jpo : return not context.flags.parity   
         
         case idaapi.NN_jnz  | idaapi.NN_jne : return not context.flags.zero
+
+        case idaapi.NN_jnbe | idaapi.NN_ja  : return not context.flags.carry and not context.flags.zero1
         
         case idaapi.NN_jg   | idaapi.NN_jnle: return not context.flags.zero and context.flags.sign == context.flags.overflow
 

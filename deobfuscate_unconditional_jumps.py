@@ -1,8 +1,6 @@
-#It's a skill issue lol.
-
 from Dependencies import idaapi, idc, idautils, ida_ua, ida_bytes, ida_xref
 import ctypes
-
+#It's a skill issue lol.
 idaapi.msg_clear()
 
 __IS32__      : bool = True
@@ -169,7 +167,7 @@ def main(effective_address: idaapi.ea_t = idc.here(), context: CpuContext  = Cpu
             continue
         
         elif is_cond_jump(instruction):
-            if eval_cond_jump(instruction.itype, context.flags):
+            if eval_cond_jump(instruction.itype, context):
                 
                 if is_junk_condition(effective_address, frame_start): 
                     print(f'[i] Conditional jump @{effective_address:x} of type: {instruction.itype:x} has been found to be junk!')
@@ -177,6 +175,8 @@ def main(effective_address: idaapi.ea_t = idc.here(), context: CpuContext  = Cpu
                     print(f'[!] Conditional jump @{effective_address:x} of type: {instruction.itype:x} has been found NOT to be junk!')
                 if is_skipped_data_junk(instruction, instruction.Op1.addr): 
                     print(f'[i] Data skipped from @{effective_address:x} to @{instruction.Op1.addr:x} has been found to be junk!')
+                    undefine_junk_code(instruction)
+                    print(f'[i] Undifined data from @{(instruction.ea + instruction.size):x} to {(instruction.Op1.addr - 1):x}')
                 else: 
                     print(f'[!] Data skipped from @{effective_address:x} to @{instruction.Op1.addr:x} has been found NOT to be junk!') 
                 idc.jumpto(instruction.Op1.addr)
@@ -186,7 +186,7 @@ def main(effective_address: idaapi.ea_t = idc.here(), context: CpuContext  = Cpu
                 continue
                 
         elif is_arithmetic(instruction) and instruction.Op2.type == ida_ua.o_imm:
-            context.flags.reset()
+            
             update_reg_imm(instruction, context)
         
         #print(f'\nStep: {iteration_count}\n{context.flags}')
@@ -194,18 +194,24 @@ def main(effective_address: idaapi.ea_t = idc.here(), context: CpuContext  = Cpu
         effective_address += instruction.size 
     return
 
-def update_reg_imm(instruction: ida_ua.insn_t, context    : CpuContext)->bool:
+def update_reg_imm(instruction: ida_ua.insn_t, context: CpuContext)->bool:
     operands: list[ida_ua.op_t] = get_operand_objects(instruction)
     try: 
         if len(operands) > 2: raise NotImplementedError
     except NotImplementedError: 
         print(f'Found {len(operands)} instructions, Stopping.')
         return False
-        
+    
     return handle_register_value(context.registers[instruction.Op1.reg], instruction, context.flags) 
 
-def handle_register_value(register: ctypes.c_uint32, instruction: ida_ua.insn_t, context_flags: FlagsContext)->None:
+def handle_register_value(register: ctypes.c_uint32, instruction: ida_ua.insn_t, context_flags: FlagsContext)->bool:
     org_reg_value: int = register.value
+    if instruction.itype  in [idaapi.NN_inc, idaapi.NN_dec]:
+        org_carry = context_flags.carry
+        context_flags.reset()
+        context_flags.carry = org_carry
+    else:
+        context_flags.reset()
     match instruction.itype:    
         case idaapi.NN_mov: register.value  = instruction.Op2.value
         
@@ -229,8 +235,10 @@ def handle_register_value(register: ctypes.c_uint32, instruction: ida_ua.insn_t,
         
         case default:
             print(f'Unhandled mnemonic of const {hex(instruction.itype)}')
-    context_flags.update(context_flags.registers[instruction.Op1.reg].value)        
-    return
+            return False
+        
+    context_flags.update(register.value)        
+    return True
 
 def handle_forward_movement(instruction: ida_ua.insn_t)->bool: return idc.jumpto(instruction.Op1.addr)
 
@@ -242,9 +250,9 @@ def cunt_msg(unhandled_flag: str)->None: return print(f'This instruction uses a 
 
 def execution_flow_shift_msg(instruction: ida_ua.insn_t, context: CpuContext)->None:
     if instruction.itype != idaapi.NN_call: 
-        return print(f'jumped to {instruction.Op1.addr:x} from {instruction.ea:x}\n\n{context}')
+        return print(f'jumped to {instruction.Op1.addr:x} from {instruction.ea:x}')
     else:
-        return print(f'Called @{instruction.Op1.addr:x} from {instruction.ea:x}\n\n{context}')
+        return print(f'Called @{instruction.Op1.addr:x} from {instruction.ea:x}')
 
 def contains_imm( operand_types: list[int])->bool: return ida_ua.o_imm  in operand_types
 
@@ -282,7 +290,7 @@ def eval_cond_jump(instruction_type: int, context: CpuContext)->bool:
         
         case idaapi.NN_jnz  | idaapi.NN_jne : return not context.flags.zero
 
-        case idaapi.NN_jnbe | idaapi.NN_ja  : return not context.flags.carry and not context.flags.zero1
+        case idaapi.NN_jnbe | idaapi.NN_ja  : return not context.flags.carry and not context.flags.zero
         
         case idaapi.NN_jg   | idaapi.NN_jnle: return not context.flags.zero and context.flags.sign == context.flags.overflow
 
@@ -315,17 +323,17 @@ def is_arithmetic(instruction: ida_ua.insn_t)->bool: return instruction.itype in
 def is_cond_jump(instruction: ida_ua.insn_t)->bool: return idaapi.NN_ja  <= instruction.itype <= idaapi.NN_jz
 
 def is_junk_condition(effective_address: idaapi.ea_t, eval_start: idaapi.ea_t)->bool:
-    last_instruction : ida_ua.insn_t = idautils.DecodeInstruction(idaapi.prev_head(effective_address, 0))
-    curr_instruction : ida_ua.insn_t = idautils.DecodeInstruction(eval_start)
-    case_operand     : ida_ua.op_t   = last_instruction.Op1
-    if last_instruction.Op1.type == ida_ua.o_reg and last_instruction.itype in __ARITHMETIC__ or last_instruction.itype == idaapi.NN_cmp and last_instruction.Op2 != idaapi.o_phrase:
-        const: int = case_operand.reg
-        while curr_instruction.ea <= effective_address:
-            if (curr_instruction.itype == idaapi.NN_mov
-                and curr_instruction.Op1.reg == const
-                and curr_instruction.Op2.type == idaapi.o_imm):
+    last_instruction     : ida_ua.insn_t = idautils.DecodeInstruction(idaapi.prev_head(effective_address, 0))
+    curr_eval_instruction: ida_ua.insn_t = idautils.DecodeInstruction(eval_start)
+    case_operand         : ida_ua.op_t   = last_instruction.Op1
+    if (case_operand.type == ida_ua.o_reg and last_instruction.itype in __ARITHMETIC__
+        or last_instruction.itype == idaapi.NN_cmp and last_instruction.Op2 != idaapi.o_phrase): 
+        while curr_eval_instruction.ea <= effective_address:
+            if (curr_eval_instruction.itype == idaapi.NN_mov
+                and curr_eval_instruction.Op1.reg  == case_operand.reg
+                and curr_eval_instruction.Op2.type == idaapi.o_imm):
                 return True
-            curr_instruction = idautils.DecodeInstruction(curr_instruction.ea + curr_instruction.size)
+            curr_eval_instruction = idautils.DecodeInstruction(curr_eval_instruction.ea + curr_eval_instruction.size)
             
     return False
 
@@ -344,5 +352,18 @@ def is_skipped_data_junk(curr_instruction: ida_ua.insn_t, destination_address: i
                 curr_instruction = idautils.DecodeInstruction(curr_addr)
     return True
 
+def undefine_junk_code(curr_instruction: ida_ua.insn_t)->None:
+    del_start_addr : idaapi.ea_t = curr_instruction.ea + curr_instruction.size
+    addresses_delta: idaapi.ea_t = curr_instruction.Op1.addr - del_start_addr - 1
+    ida_bytes.del_items(del_start_addr, ida_bytes.DELIT_SIMPLE, addresses_delta)
+    if not ida_bytes.is_code(ida_bytes.get_flags(curr_instruction.Op1.addr)):
+        curr_fixed_up_addr: idaapi.ea_t = curr_instruction.Op1.addr + ida_ua.create_insn(curr_instruction.Op1.addr)
+        while not ida_bytes.is_code(ida_bytes.get_flags(curr_fixed_up_addr)):
+            new_inst_size = ida_ua.create_insn(curr_fixed_up_addr)
+            if not new_inst_size: 
+                return False
+            curr_fixed_up_addr += new_inst_size
+    return True
+    
 if __name__ == '__main__':
     main()

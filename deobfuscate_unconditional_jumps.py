@@ -1,13 +1,15 @@
-from Dependencies import idaapi, idc, idautils, ida_ua, ida_bytes, ida_xref
+from Dependencies import idaapi, idc, idautils,ida_allins, ida_bytes, ida_xref, ida_ua
 import ctypes, enum
 #It's a skill issue lol.
 idaapi.msg_clear()
 
-__IS32__      : bool = True
-__IS64__      : bool = False
-__JUMP_COUNT__: int  = 0x2
-__OPER_COUNT__: int  = 0x8 
-__ARITHMETIC__: list[int] = [idaapi.NN_add, idaapi.NN_sub, idaapi.NN_inc, idaapi.NN_dec, idaapi.NN_mul, idaapi.NN_div]
+__IS32__       : bool = True
+__IS64__       : bool = False
+__JUMP_COUNT__ : int  = 0x4
+__OPER_COUNT__ : int  = 0x8 
+__ARITHMETIC__ : list[int] = [ida_allins.NN_add, ida_allins.NN_sub, ida_allins.NN_inc, ida_allins.NN_dec, ida_allins.NN_mul, ida_allins.NN_div]
+__COMPARITIVE__: list[int] = [ida_allins.NN_cmp, ida_allins.NN_test]
+
 
 class SkippedDataFlags(enum.Enum):
     FINISHED_IS_NOT_JUNK = 0
@@ -157,30 +159,29 @@ def main(effective_address: idaapi.ea_t = idc.here(), context: CpuContext  = Cpu
             print(f'Not code @{effective_address:x}')
             break
         
-        elif instruction.itype == idaapi.NN_call:
-            
+        elif instruction.itype in __COMPARITIVE__:  
             if are_skipped_instructions_junk(instruction, instruction.Op1.addr): 
                 print(f'[i] Data skipped from @{effective_address:x} to @{instruction.Op1.addr:x} has been found to be junk!')
                 if undefine_junk_code(instruction): 
                     print(f'[i] Undifined data from @{(instruction.ea + instruction.size):x} to {(instruction.Op1.addr - 1):x}')
-                    
                 else: 
                     print(f'[i] Failed to undifined data from @{(instruction.ea + instruction.size):x} to {(instruction.Op1.addr - 1):x}')
-                
             else: 
                 print(f'[!] Data skipped from @{effective_address:x} to @{instruction.Op1.addr:x} has been found NOT to be junk!') 
             
-            execution_flow_shift_msg(instruction, context)
-            effective_address = instruction.Op1.addr
+            execution_flow_shift_msg(instruction)
             idc.jumpto(instruction.Op1.addr)
-            jump_count += 1
+            effective_address = instruction.Op1.addr
+            frame_start       = instruction.Op1.addr
+            jump_count       += 1
             continue
 
         elif is_non_cond_jump(instruction):
-            execution_flow_shift_msg(instruction, context)
-            effective_address, frame_start = instruction.Op1.addr, instruction.Op1.addr
+            execution_flow_shift_msg(instruction)
             idc.jumpto(instruction.Op1.addr)
-            jump_count += 1
+            effective_address = instruction.Op1.addr 
+            frame_start       = instruction.Op1.addr
+            jump_count       += 1
             continue
         
         elif is_cond_jump(instruction):
@@ -205,8 +206,8 @@ def main(effective_address: idaapi.ea_t = idc.here(), context: CpuContext  = Cpu
                 
                 idc.jumpto(instruction.Op1.addr)
                 effective_address = instruction.Op1.addr
-                frame_start = instruction.Op1.addr
-                jump_count += 1
+                frame_start       = instruction.Op1.addr
+                jump_count       += 1
                 continue
                 
         elif is_arithmetic(instruction) and instruction.Op2.type == ida_ua.o_imm:
@@ -230,32 +231,38 @@ def update_reg_imm(instruction: ida_ua.insn_t, context: CpuContext)->bool:
 
 def handle_register_value(register: ctypes.c_uint32, instruction: ida_ua.insn_t, context_flags: FlagsContext)->bool:
     org_reg_value: int = register.value
-    if instruction.itype  in [idaapi.NN_inc, idaapi.NN_dec]:
+    if instruction.itype  in [ida_allins.NN_inc, ida_allins.NN_dec]:
         org_carry = context_flags.carry
         context_flags.reset()
         context_flags.carry = org_carry
     else:
         context_flags.reset()
     match instruction.itype:    
-        case idaapi.NN_mov: register.value  = instruction.Op2.value
+        case ida_allins.NN_mov: register.value  = instruction.Op2.value
         
-        case idaapi.NN_add: 
+        case ida_allins.NN_add: 
             register.value += instruction.Op2.value
             context_flags.set_carry_add(org_reg_value, register.value)
             context_flags.set_overflow_add(org_reg_value, instruction.Op2.value, register.value)
 
-        case idaapi.NN_sub:
+        case ida_allins.NN_sub:
             register.value -= instruction.Op2.value
             context_flags.set_carry_sub   (org_reg_value, register.value)
             context_flags.set_overflow_sub(org_reg_value, instruction.Op2.value, register.value)
 
-        case idaapi.NN_dec:
+        case ida_allins.NN_dec:
             register.value -= 1        
             context_flags.set_overflow_sub(org_reg_value, 1, register.value)
 
-        case idaapi.NN_inc:
+        case ida_allins.NN_inc:
             register.value += 1
             context_flags.set_overflow_add(org_reg_value, 1, register.value)
+        
+        case ida_allins.NN_cmp:
+            pass
+        
+        case ida_allins.NN_test:
+            pass
         
         case default:
             print(f'Unhandled mnemonic of const {hex(instruction.itype)}')
@@ -272,8 +279,8 @@ def reg_msg(register_name: str, instruction: ida_ua.insn_t)->None: return print(
 
 def cunt_msg(unhandled_flag: str)->None: return print(f'This instruction uses a {unhandled_flag}, start handling it ya cunt.')
 
-def execution_flow_shift_msg(instruction: ida_ua.insn_t, context: CpuContext)->None:
-    if instruction.itype != idaapi.NN_call: 
+def execution_flow_shift_msg(instruction: ida_ua.insn_t)->None:
+    if instruction.itype != ida_allins.NN_call: 
         return print(f'jumped to {instruction.Op1.addr:x} from {instruction.ea:x}')
     else:
         return print(f'Called @{instruction.Op1.addr:x} from {instruction.ea:x}')
@@ -286,43 +293,43 @@ def contains_reg( operand_types: list[int])->bool: return ida_ua.o_reg  in opera
 
 def eval_cond_jump(instruction_type: int, context: CpuContext)->bool:
     match instruction_type:
-        case idaapi.NN_jo   : return context.flags.overflow
+        case ida_allins.NN_jo   : return context.flags.overflow
         
-        case idaapi.NN_js   : return context.flags.sign
+        case ida_allins.NN_js   : return context.flags.sign
         
-        case idaapi.NN_jl   : return context.flags.sign != context.flags.overflow
+        case ida_allins.NN_jl   : return context.flags.sign != context.flags.overflow
         
-        case idaapi.NN_jno  : return not context.flags.overflow
+        case ida_allins.NN_jno  : return not context.flags.overflow
         
-        case idaapi.NN_jns  : return not context.flags.sign
+        case ida_allins.NN_jns  : return not context.flags.sign
 
-        case idaapi.NN_jcxz : return not context.reg_cx & 0xFFFF
+        case ida_allins.NN_jcxz : return not context.reg_cx & 0xFFFF
         
-        case idaapi.NN_jecxz: return not context.reg_cx & 0xFFFFFFFF
+        case ida_allins.NN_jecxz: return not context.reg_cx & 0xFFFFFFFF
         
-        case idaapi.NN_jrcxz: return not context.reg_cx & 0xFFFFFFFFFFFFFFFF
+        case ida_allins.NN_jrcxz: return not context.reg_cx & 0xFFFFFFFFFFFFFFFF
         
-        case idaapi.NN_jp   | idaapi.NN_jpe : return context.flags.parity
+        case ida_allins.NN_jp   | ida_allins.NN_jpe : return context.flags.parity
         
-        case idaapi.NN_jbe  | idaapi.NN_jna : return context.flags.carry or context.flags.zero
+        case ida_allins.NN_jbe  | ida_allins.NN_jna : return context.flags.carry or context.flags.zero
 
-        case idaapi.NN_jge  | idaapi.NN_jnl : return context.flags.sign == context.flags.overflow
+        case ida_allins.NN_jge  | ida_allins.NN_jnl : return context.flags.sign == context.flags.overflow
         
-        case idaapi.NN_jle  | idaapi.NN_jng : return context.flags.sign != context.flags.overflow or context.flags.zero
+        case ida_allins.NN_jle  | ida_allins.NN_jng : return context.flags.sign != context.flags.overflow or context.flags.zero
         
-        case idaapi.NN_jnp  | idaapi.NN_jpo : return not context.flags.parity   
+        case ida_allins.NN_jnp  | ida_allins.NN_jpo : return not context.flags.parity   
         
-        case idaapi.NN_jnz  | idaapi.NN_jne : return not context.flags.zero
+        case ida_allins.NN_jnz  | ida_allins.NN_jne : return not context.flags.zero
 
-        case idaapi.NN_jnbe | idaapi.NN_ja  : return not context.flags.carry and not context.flags.zero
+        case ida_allins.NN_jnbe | ida_allins.NN_ja  : return not context.flags.carry and not context.flags.zero
         
-        case idaapi.NN_jg   | idaapi.NN_jnle: return not context.flags.zero and context.flags.sign == context.flags.overflow
+        case ida_allins.NN_jg   | ida_allins.NN_jnle: return not context.flags.zero and context.flags.sign == context.flags.overflow
 
-        case idaapi.NN_jz   | idaapi.NN_je  | idaapi.NN_jnge: return context.flags.zero  
+        case ida_allins.NN_jz   | ida_allins.NN_je  | ida_allins.NN_jnge: return context.flags.zero  
         
-        case idaapi.NN_jb   | idaapi.NN_jc  | idaapi.NN_jnae: return context.flags.carry
+        case ida_allins.NN_jb   | ida_allins.NN_jc  | ida_allins.NN_jnae: return context.flags.carry
         
-        case idaapi.NN_jnb  | idaapi.NN_jnc | idaapi.NN_jae : return not context.flags.carry
+        case ida_allins.NN_jnb  | ida_allins.NN_jnc | ida_allins.NN_jae : return not context.flags.carry
         
 def get_operands_types(operand_objects: list[ida_ua.op_t] | None = None, instruction: ida_ua.insn_t | None = None)->list[int]:
     try:
@@ -344,16 +351,16 @@ def get_operand_objects(instruction: ida_ua.insn_t)->list[ida_ua.op_t]:
 
 def is_arithmetic(instruction: ida_ua.insn_t)->bool: return instruction.itype in __ARITHMETIC__
 
-def is_cond_jump(instruction: ida_ua.insn_t)->bool: return idaapi.NN_ja  <= instruction.itype <= idaapi.NN_jz
+def is_cond_jump(instruction: ida_ua.insn_t)->bool: return ida_allins.NN_ja  <= instruction.itype <= ida_allins.NN_jz
 
 def is_junk_condition(effective_address: idaapi.ea_t, eval_start: idaapi.ea_t)->bool:
     last_instruction     : ida_ua.insn_t = idautils.DecodeInstruction(idaapi.prev_head(effective_address, 0))
     curr_eval_instruction: ida_ua.insn_t = idautils.DecodeInstruction(eval_start)
     case_operand         : ida_ua.op_t   = last_instruction.Op1
     if (case_operand.type == ida_ua.o_reg and last_instruction.itype in __ARITHMETIC__
-        or last_instruction.itype == idaapi.NN_cmp and last_instruction.Op2 != idaapi.o_phrase): 
+        or last_instruction.itype in __COMPARITIVE__ and last_instruction.Op2 != idaapi.o_phrase): 
         while curr_eval_instruction.ea <= effective_address:
-            if (curr_eval_instruction.itype == idaapi.NN_mov
+            if (curr_eval_instruction.itype == ida_allins.NN_mov
                 and curr_eval_instruction.Op1.reg  == case_operand.reg
                 and curr_eval_instruction.Op2.type == idaapi.o_imm):
                 return True
@@ -361,7 +368,7 @@ def is_junk_condition(effective_address: idaapi.ea_t, eval_start: idaapi.ea_t)->
             
     return False
 
-def is_non_cond_jump( instruction: ida_ua.insn_t )->bool: return idaapi.NN_jmp <= instruction.itype <= idaapi.NN_jmpshort
+def is_non_cond_jump( instruction: ida_ua.insn_t )->bool: return ida_allins.NN_jmp <= instruction.itype <= ida_allins.NN_jmpshort
 
 def are_skipped_instructions_junk(curr_instruction: ida_ua.insn_t, destination_address: idaapi.ea_t)->bool:
     addresses_delta : int = destination_address - curr_instruction.ea

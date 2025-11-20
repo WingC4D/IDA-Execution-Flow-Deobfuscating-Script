@@ -1,12 +1,12 @@
-from Dependencies import idaapi, idc, idautils,ida_allins, ida_bytes, ida_xref, ida_ua
+from Dependencies import idaapi, idc, idautils,ida_allins, ida_bytes, ida_xref, ida_ua, ida_netnode, ida_auto,ida_kernwin
 import ctypes, enum
-#import idaapi, idc, idautils,ida_allins, ida_bytes, ida_xref, ida_ua, ctypes, enum
+#import idaapi, idc, idautils,ida_allins, ida_bytes, ida_xref, ida_ua, ctypes, enum, ida_netnode, ida_auto,ida_kernwin
 #It's a skill issue lol.
 idaapi.msg_clear()
 
 __IS32__       : bool = idaapi.inf_is_32bit_exactly()
 __IS64__       : bool = idaapi.inf_is_64bit()
-__JUMP_COUNT__ : int  = 0x1
+__JUMP_COUNT__ : int  = 0x4
 __OPER_COUNT__ : int  = 0x8 
 __ARITHMETIC__ : list[int] = [ida_allins.NN_add, ida_allins.NN_sub, ida_allins.NN_inc, ida_allins.NN_dec, ida_allins.NN_mul, ida_allins.NN_div]
 __COMPARATIVE__: list[int] = [ida_allins.NN_cmp, ida_allins.NN_test]
@@ -144,78 +144,95 @@ def main(effective_address: idaapi.ea_t = idc.here(), context: CpuContext  = Cpu
     jump_count      : int         = 0
     iteration_count : int         = 1
     frame_start     : idaapi.ea_t = effective_address
-    while True:
-        instruction       : ida_ua.insn_t     = idautils.DecodeInstruction(effective_address)
-        context.registers[idautils.procregs.eip.reg].value = effective_address 
-        
-        if not ida_bytes.is_code(ida_bytes.get_flags(effective_address)) or jump_count >= __JUMP_COUNT__:  
-            if jump_count >= __JUMP_COUNT__:
-                print(f'Taken {__JUMP_COUNT__} jumps, all finished.')
+    old_auto_state = ida_auto.enable_auto(False)
+    try:
+        while True:
+            instruction       : ida_ua.insn_t     = idautils.DecodeInstruction(effective_address)
+            context.registers[idautils.procregs.eip.reg].value = effective_address 
+            
+            if not ida_bytes.is_code(ida_bytes.get_flags(effective_address)) or jump_count >= __JUMP_COUNT__:  
+                if jump_count >= __JUMP_COUNT__:
+                    print(f'[✓] Taken {__JUMP_COUNT__} jumps, all finished.')
+                    break
+                
+                print(f'Not code @{effective_address:x}')
                 break
             
-            print(f'Not code @{effective_address:x}')
-            break
-        
-        elif instruction.itype == ida_allins.NN_call:  
-            idc.jumpto(instruction.Op1.addr)
-            if are_skipped_instructions_junk(instruction, instruction.Op1.addr): 
-                print(f'[i] Data skipped from @{effective_address:x} to @{instruction.Op1.addr:x} has been found to be junk!')
-                if undefine_junk_code(instruction): 
-                    print(f'[i] Undefined data from @{(instruction.ea + instruction.size):x} to {(instruction.Op1.addr):x}')
-                else: 
-                    print(f'[i] Failed to undefined data from @{(instruction.ea + instruction.size):x} to {(instruction.Op1.addr):x}')
-                    break
-            else: 
-                print(f'[!] Data skipped from @{effective_address:x} to @{instruction.Op1.addr:x} has been found NOT to be junk!') 
-            
-            print(f'Called @{instruction.Op1.addr:x} from {instruction.ea:x}')
-            
-            effective_address = instruction.Op1.addr
-            frame_start       = instruction.Op1.addr
-            jump_count       += 1
-            continue
-
-        elif is_non_cond_jump(instruction):
-            execution_flow_shift_msg(instruction)
-            idc.jumpto(instruction.Op1.addr)
-            effective_address = instruction.Op1.addr 
-            frame_start       = instruction.Op1.addr
-            jump_count       += 1
-            continue
-        
-        elif is_cond_jump(instruction):
-            if eval_cond_jump(instruction.itype, context):
-                
-                if is_junk_condition(instruction.ea, frame_start): 
-                    print(f'[i] Conditional jump @{effective_address:x} of type: {instruction.itype:x} has been found to be junk!')
-                
-                else: 
-                    print(f'[!] Conditional jump @{effective_address:x} of type: {instruction.itype:x} has been found NOT to be junk!')
-                
+            elif instruction.itype == ida_allins.NN_call:  
+                #idc.jumpto(instruction.Op1.addr)
                 if are_skipped_instructions_junk(instruction, instruction.Op1.addr): 
-                    print(f'[i] Data skipped from @{effective_address:x} to @{instruction.Op1.addr:x} has been found to be junk!')
+                    print(f'[✓] Data skipped from @{effective_address:x} to @{instruction.Op1.addr:x} has been found to be junk!')
                     if undefine_junk_code(instruction): 
-                        print(f'[i] Undefined data from @{(instruction.ea + instruction.size):x} to {(instruction.Op1.addr - 1):x}')
-                    
+                        print(f'[✓] Undefined data from @{(instruction.ea + instruction.size):x} to {(instruction.Op1.addr):x}')
+                        if not ida_bytes.is_code(ida_bytes.get_flags(instruction.Op1.addr)):
+                            print(f'[i] Byte @{instruction.Op1.addr:x} Has been found to be unexplored, calling handle_delete_mistake')
+                            if not handle_delete_mistakes(instruction.Op1.addr):
+                                print(f'[✕] Failed to create instruction @{instruction.Op1.addr:x}')
+                                break
+                        else:
+                            print(f'[✓] Byte @{instruction.Op1.addr:x} Has been found to be code, continuing')
                     else: 
-                        print(f'[i] Failed to undefined data from @{(instruction.ea + instruction.size):x} to {(instruction.Op1.addr - 1):x}')
-                
+                        print(f'[✕] Failed to undefined data from @{(instruction.ea + instruction.size):x} to {(instruction.Op1.addr):x}')
+                        break
+
                 else: 
-                    print(f'[!] Data skipped from @{effective_address:x} to @{instruction.Op1.addr:x} has been found NOT to be junk!') 
+                    print(f'[i] Data skipped from @{effective_address:x} to @{instruction.Op1.addr:x} has been found NOT to be junk!') 
                 
-                idc.jumpto(instruction.Op1.addr)
+                print(f'[i] Called @{instruction.Op1.addr:x} from {instruction.ea:x}')
+                
                 effective_address = instruction.Op1.addr
                 frame_start       = instruction.Op1.addr
                 jump_count       += 1
                 continue
-                
-        elif is_arithmetic(instruction) and instruction.Op2.type == ida_ua.o_imm:
+
+            elif is_non_cond_jump(instruction):
+                execution_flow_shift_msg(instruction)
+                #idc.jumpto(instruction.Op1.addr)
+                effective_address = instruction.Op1.addr 
+                frame_start       = instruction.Op1.addr
+                jump_count       += 1
+                continue
             
-            update_reg_imm(instruction, context)
+            elif is_cond_jump(instruction):
+                if eval_cond_jump(instruction.itype, context):
+                    
+                    if is_junk_condition(instruction.ea, frame_start): 
+                        print(f'[✓] Conditional jump @{effective_address:x} of type: {instruction.itype:x} has been found to be junk!')
+                    
+                    else: 
+                        print(f'[i] Conditional jump @{effective_address:x} of type: {instruction.itype:x} has been found NOT to be junk!')
+                    
+                    if are_skipped_instructions_junk(instruction, instruction.Op1.addr): 
+                        print(f'[✓] Data skipped from @{effective_address:x} to @{instruction.Op1.addr:x} has been found to be junk!')
+                        if undefine_junk_code(instruction): 
+                            print(f'[✓] Undefined data from @{(instruction.ea + instruction.size):x} to {(instruction.Op1.addr - 1):x}')
+                        
+                        else: 
+                            print(f'[✕] Failed to undefined data from @{(instruction.ea + instruction.size):x} to {(instruction.Op1.addr - 1):x}')
+
+                        if not ida_bytes.is_code(ida_bytes.get_flags(instruction.Op1.addr)):
+                            handle_delete_mistakes(instruction.Op1.addr)
+                    else: 
+                        print(f'[i] Data skipped from @{effective_address:x} to @{instruction.Op1.addr:x} has been found NOT to be junk!') 
+                    
+                    #idc.jumpto(instruction.Op1.addr)
+                    effective_address = instruction.Op1.addr
+                    frame_start       = instruction.Op1.addr
+                    jump_count       += 1
+                    continue
+                    
+            elif is_arithmetic(instruction) and instruction.Op2.type == ida_ua.o_imm:
+                
+                update_reg_imm(instruction, context)
+
+            #print(f'\nStep: {iteration_count}\n{context.flags}')
+            iteration_count += 1
+            effective_address += instruction.size 
         
-        #print(f'\nStep: {iteration_count}\n{context.flags}')
-        iteration_count += 1
-        effective_address += instruction.size 
+    finally:
+        #ida_auto.enable_auto(old_auto_state)
+        ida_kernwin.request_refresh(ida_kernwin.IWID_DISASMS)
+
     return
 
 def update_reg_imm(instruction: ida_ua.insn_t, context: CpuContext)->bool:
@@ -412,25 +429,13 @@ def undefine_junk_code(curr_instruction: ida_ua.insn_t)->bool:
         return False
     
     #print(f'Delete Start @{hex(del_start_addr)}\nDelete Range Len = {addresses_delta}\nDelete End @{(del_start_addr + addresses_delta):x}\nInstruction.Op1.Address = {curr_instruction.Op1.addr:x}')
-    
-    return ida_bytes.del_items(del_start_addr, ida_bytes.DELIT_SIMPLE, addresses_delta)   
-    
-def handle_delete_mistakes(curr_instruction: ida_ua.insn_t)->bool:
-    del_start_addr: idaapi.ea_t = curr_instruction.ea + curr_instruction.size
-    addresses_delta: idaapi.ea_t = curr_instruction.Op1.addr - (curr_instruction.ea + curr_instruction.size)
-    if not ida_bytes.is_code(ida_bytes.get_flags(curr_instruction.Op1.addr)):
-        new_inst_size = ida_ua.create_insn(curr_instruction.Op1.addr)
-        if not new_inst_size: 
-                return False
-        if ida_bytes.is_code(ida_bytes.getflags(del_start_addr)):
-            ida_bytes.del_items(del_start_addr, ida_bytes.DELIT_SIMPLE, addresses_delta)
-        curr_fixed_up_addr: idaapi.ea_t = curr_instruction.Op1.addr + new_inst_size
-        while not ida_bytes.is_code(ida_bytes.get_flags(curr_fixed_up_addr)):
-            new_inst_size = ida_ua.create_insn(curr_fixed_up_addr)
-            if not new_inst_size: 
-                return False
-            curr_fixed_up_addr += new_inst_size
-    return True
+    ida_xref.del_cref(curr_instruction.ea, del_start_addr, 1)
+    if ida_bytes.create_data(del_start_addr, ida_bytes.FF_BYTE, 1, ida_netnode.BADNODE):
+        print('Gemeni\'s Condtion Met'); del_start_addr += 1
+    return ida_bytes.del_items(del_start_addr, ida_bytes.DELIT_SIMPLE | ida_bytes.DELIT_EXPAND, addresses_delta)
+
+def handle_delete_mistakes(target_address: idaapi.ea_t)->int:
+    return ida_ua.create_insn(target_address)
     
 if __name__ == '__main__':
     main()

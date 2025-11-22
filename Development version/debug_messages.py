@@ -5,8 +5,8 @@ def exec_flow_shift_msg(instruction: ida_ua.insn_t)->None:
 def regs_msg(register_name: str, instruction: ida_ua.insn_t)->None: 
     return print(f'Found a reference to {register_name} @{instruction.ea:x}')
 
-def cunt_msg(unhandled_flag: str)->None: 
-    return print(f'This instruction uses a {unhandled_flag}, start handling it ya cunt.')
+def lazy_msg(unhandled_flag: str)->None: 
+    return print(f'This instruction uses a {unhandled_flag}, start handling it ya lazy.')
 
 def unhandled_jump_msg (jump_name: str)->bool:
     print(f'[!] Hit an unhandled jump of type {jump_name} returning False')

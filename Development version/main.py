@@ -48,7 +48,7 @@ def deobfuscate_false_uncond_jumps_and_calls(effective_address: idaapi.ea_t = id
                 continue
 
         if is_arithmetic(instruction) and instruction.Op2.type == ida_ua.o_imm:
-            context.update
+            context.update(instruction)
 
         effective_address += instruction.size
 

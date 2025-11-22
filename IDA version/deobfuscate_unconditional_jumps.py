@@ -7,6 +7,7 @@ __JUMP_LIMIT__ : int       = 0x4
 __OPER_COUNT__ : int       = 0x8
 __ARITHMETIC__ : list[int] = [ida_allins.NN_add, ida_allins.NN_sub, ida_allins.NN_inc, ida_allins.NN_dec, ida_allins.NN_mul, ida_allins.NN_div]
 __COMPARATIVE__: list[int] = [ida_allins.NN_cmp, ida_allins.NN_test]
+__BITWISE_OPS__: list[int] = [ida_allins.NN_and, ida_allins.NN_or, ida_allins.NN_xor]
 
 try:
     if __32bit__:
@@ -40,10 +41,46 @@ class SkippedDataState(enum.Enum):
     FINISHED_IS_JUNK     = 1
     NOT_FINISHED_IS_CODE = 2
 
+class Data:
+    def __init__(self, 
+                 data   : int | str | idaapi.ea_t, 
+                 address: idaapi.ea_t,
+                 size   : int):
+        self.data = data
+        self.size = size
+        self.addr = address 
+        
+class StackData(Data):
+    def __init__(self, 
+                 data        : int | str | idaapi.ea_t, 
+                 address     : idaapi.ea_t, 
+                 size        : int, 
+                 stack_offset: int):
+        super().__init__(data, address, size)
+        
+        self.offset = stack_offset
+        
+class Stack:
+    def __init__(self, 
+                 creation_address: idaapi.ea_t,
+                 base_pointer    : idaapi.ea_t,
+                 stack_pointer   : idaapi.ea_t)->None:
+        self.origin: idaapi.ea_t = creation_address
+        self.base  : idaapi.ea_t = base_pointer
+        self.top   : idaapi.ea_t = stack_pointer
+        self.data  : dict        = {}
+
+    def add_data(self, data_raw, stack_data: StackData)->None:
+        if stack_data.offset > self.top:
+            print(f'[!] Appended outside,')
+
+        self.data[stack_data.offset] = stack_data
+
+    
 class FlagsContext:
     def __init__(self)->None:
         self.zero           : bool = False
-        self.parity         : bool = False  # PF (bit 2): Parity flag - Set if the least-significant byte of the result contains an even number of bits set to 1; cleared otherwise.
+        self.parity         : bool = False
         self.auxiliary_carry: bool = False
         self.overflow       : bool = False
         self.direction      : bool = False
@@ -68,6 +105,7 @@ class FlagsContext:
         if self._check_sign(org_value_a) == self._check_sign(value_b): self.overflow = self._check_sign(value_b) != self._check_sign(result)
         else                                                         : self.overflow = False
         return
+    
     def set_overflow_sub(self, result: int, org_value_a: int, value_b: int)->None:
         if self._check_sign(org_value_a) != self._check_sign(value_b): self.overflow = self._check_sign(value_b) == self._check_sign(result)
         else                                                         : self.overflow = False
@@ -86,9 +124,9 @@ class FlagsContext:
     def reset(self)->None: self.carry, self.overflow, self.sign, self.zero, self.parity = False, False, False, False, False
 
     def update(self, result: int)->None:
-        self.zero = result == 0
+        self.zero =     result == 0
         self.set_parity(result)
-        self.set_sign(result)
+        self.set_sign(  result)
 
 class CpuContext:
     def __init__(self):
@@ -140,56 +178,62 @@ class CpuContext:
 	\tReg_IP: {hex(self.reg_ip)}
 	
     - {self.flags}\n"""
+
+    def update_regs_n_flags_imm(self, instruction: ida_ua.insn_t,)->bool:
+        org_reg_value: int = self.registers[instruction.Op1.reg].value
+        if instruction.itype == ida_allins.NN_mov:
+            self.registers[instruction.Op1.reg].value = instruction.Op2.value
+            return True
             
-    def update(self, instruction: ida_ua.insn_t,)->bool:
-        org_reg_value: int = self.registers[instruction.Op1.value].value
-        if instruction.itype in [ida_allins.NN_inc, ida_allins.NN_dec]:
+        elif instruction.itype in [ida_allins.NN_inc, ida_allins.NN_dec]:
             org_carry = self.flags.carry
             self.flags.reset()
             self.flags.carry = org_carry
+        
         else:
             self.flags.reset()
+        
         match instruction.itype:
-            case ida_allins.NN_mov:
-                self.registers[instruction.Op1.value].value = instruction.Op2.value
-
             case ida_allins.NN_add:
-                self.registers[instruction.Op1.value].value += instruction.Op2.value
-                self.flags.set_carry_add(org_reg_value, self.registers[instruction.Op1.value].value)
-                self.flags.set_overflow_add(org_reg_value, instruction.Op2.value, self.registers[instruction.Op1.value].value)
+                self.registers[instruction.Op1.reg].value += instruction.Op2.value
+                self.flags.set_carry_add(   self.registers[instruction.Op1.reg].value, org_reg_value)
+                self.flags.set_overflow_add(self.registers[instruction.Op1.reg].value, org_reg_value, instruction.Op2.value)
 
             case ida_allins.NN_sub:
-                self.registers[instruction.Op1.value].value -= instruction.Op2.value
-                self.flags.set_carry_sub(org_reg_value, self.registers[instruction.Op1.value].value)
-                self.flags.set_overflow_sub(org_reg_value, instruction.Op2.value, self.registers[instruction.Op1.value].value)
+                self.registers[instruction.Op1.reg].value -= instruction.Op2.value
+                self.flags.set_carry_sub(   self.registers[instruction.Op1.reg].value, org_reg_value)
+                self.flags.set_overflow_sub(self.registers[instruction.Op1.reg].value, org_reg_value, instruction.Op2.value)
 
             case ida_allins.NN_dec:
-                self.registers[instruction.Op1.value].value -= 1
-                self.flags.set_overflow_sub(org_reg_value, 1, self.registers[instruction.Op1.value].value)
+                self.registers[instruction.Op1.reg].value -= 1
+                self.flags.set_overflow_sub(self.registers[instruction.Op1.reg].value,org_reg_value, 1)
 
             case ida_allins.NN_inc:
-                self.registers[instruction.Op1.value].value += 1
-                self.flags.set_overflow_add(org_reg_value, 1, self.registers[instruction.Op1.value].value)
+                self.registers[instruction.Op1.reg].value += 1
+                self.flags.set_overflow_add(self.registers[instruction.Op1.reg].value, org_reg_value, 1)
 
             case ida_allins.NN_cmp:
-                operand_one_sign_status: bool = self.flags._check_sign(instruction.Op1.value)
-                operand_two_sign_status: bool = self.flags._check_sign(instruction.Op2.value)
-                comp_result            : int  = instruction.Op1.value - instruction.Op2.value
-                if operand_one_sign_status  == operand_two_sign_status:
+                comp_result = __UINT__(self.registers[instruction.Op1.reg].value - instruction.Op2.value)
+                self.flags.set_carry_sub(   comp_result.value, org_reg_value)
+                self.flags.set_overflow_sub(comp_result.value, org_reg_value, instruction.Op2.value)
+                
+                if comp_result.value == 0:
                     self.flags.zero = True
-                elif operand_one_sign_status:
-                    pass
-                else:
-                    pass   
+                self.flags.update(comp_result.value)
+                return True
                 
             case ida_allins.NN_test:
-                pass
-
+                test_result = self.registers[instruction.Op1.reg].value & instruction.Op2.value
+                if test_result == 0:
+                    self.flags.zero = True
+                self.flags.update(test_result)
+                return True
+                
             case default:
                 print(f'Unhandled mnemonic of const {hex(instruction.itype)}')
                 return False
 
-        self.flags.update(self.registers[instruction.Op1.value].value)
+        self.flags.update(self.registers[instruction.Op1.reg].value)
         return True
 
     def eval_cond_jump(self, instruction_type: int)->bool:
@@ -220,25 +264,23 @@ def deobfuscate_false_uncond_jumps_and_calls(effective_address: idaapi.ea_t = id
                                              jump_count       : int         = 0)->int:
     
     frame_start: idaapi.ea_t = effective_address
-    while True:
+    while jump_count < __JUMP_LIMIT__:
         
         instruction: ida_ua.insn_t = idautils.DecodeInstruction(effective_address)
         context.registers[idautils.procregs.eip.reg].value = effective_address
         
-        if not ida_bytes.is_code(ida_bytes.get_flags(effective_address)) or jump_count >= __JUMP_LIMIT__:
-            if jump_count >= __JUMP_LIMIT__:
-                print(f'[✓] Taken {__JUMP_LIMIT__} jumps, all finished.')
-                break
-            
+        if not ida_bytes.is_code(ida_bytes.get_flags(effective_address)):
             print(f'[✕] Not code @{effective_address:x}, breaking the loop.')
             
             break
 
-        if instruction.itype == ida_allins.NN_call:
+        if ida_allins.NN_call <= instruction.itype <= ida_allins.NN_callni:
             print(f'[i] Called @{instruction.Op1.addr:x} from {instruction.ea:x}')
+            
             if not handle_forward_movement(instruction):
-                    print('[✕] Handle Forward Movement Failed! breaking the loop')
-                    break
+                print('[✕] Handle Forward Movement Failed! breaking the loop')
+                break
+            
             effective_address = instruction.Op1.addr
             frame_start       = instruction.Op1.addr
             jump_count       += 1
@@ -273,7 +315,7 @@ def deobfuscate_false_uncond_jumps_and_calls(effective_address: idaapi.ea_t = id
                 continue
 
         if is_arithmetic(instruction) and instruction.Op2.type == ida_ua.o_imm:
-            context.update(instruction)
+            context.update_regs_n_flags_imm(instruction)
         
         effective_address += instruction.size
     idc.jumpto(effective_address)
@@ -347,13 +389,14 @@ def get_operand_objects(instruction: ida_ua.insn_t)->list[ida_ua.op_t]:
     
     return result
 
-def is_arithmetic(      instruction: ida_ua.insn_t)->bool: return instruction.itype in __ARITHMETIC__
-def is_cond_jump(       instruction: ida_ua.insn_t)->bool: return ida_allins.NN_ja  <= instruction.itype <= ida_allins.NN_jz
-def is_non_cond_jump(   instruction: ida_ua.insn_t)->bool: return ida_allins.NN_jmp <= instruction.itype <= ida_allins.NN_jmpshort
-def is_junk_condition(  current_exec_instruction: ida_ua.insn_t, eval_start: idaapi.ea_t)->bool:
-    previous_instruction     : ida_ua.insn_t = idautils.DecodeInstruction(idaapi.prev_head(current_exec_instruction.ea, 0))
-    current_eval_instruction : ida_ua.insn_t = idautils.DecodeInstruction(eval_start)
-    case_operand             : ida_ua.op_t   = previous_instruction.Op1
+def is_arithmetic(   instruction: ida_ua.insn_t)->bool: return instruction.itype in __ARITHMETIC__
+def is_cond_jump(    instruction: ida_ua.insn_t)->bool: return ida_allins.NN_ja  <= instruction.itype <= ida_allins.NN_jz
+def is_non_cond_jump(instruction: ida_ua.insn_t)->bool: return ida_allins.NN_jmp <= instruction.itype <= ida_allins.NN_jmpshort
+
+def is_junk_condition(current_exec_instruction: ida_ua.insn_t, eval_start: idaapi.ea_t)->bool:
+    previous_instruction    : ida_ua.insn_t = idautils.DecodeInstruction(idaapi.prev_head(current_exec_instruction.ea, 0))
+    current_eval_instruction: ida_ua.insn_t = idautils.DecodeInstruction(eval_start)
+    case_operand            : ida_ua.op_t   = previous_instruction.Op1
     
     if (previous_instruction.itype in __ARITHMETIC__  and case_operand.type == ida_ua.o_reg 
     or  previous_instruction.itype in __COMPARATIVE__ and previous_instruction.Op2.type  != idaapi.o_phrase):
@@ -373,8 +416,10 @@ def are_skipped_instructions_junk(instruction: ida_ua.insn_t)->bool:
     addresses_delta: int = helper_delta(instruction)
     if not addresses_delta:
         return False
+    
     eval_instruction: ida_ua.insn_t = instruction
     next_addr       : idaapi.ea_t   = instruction.ea + instruction.size
+    
     while next_addr <= instruction.Op1.addr:
         second_referer: idaapi.ea_t = ida_xref.get_next_cref_to(eval_instruction.ea, ida_xref.get_first_cref_to(eval_instruction.ea))
         

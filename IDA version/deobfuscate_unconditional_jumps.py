@@ -303,9 +303,6 @@ class CpuContext:
                 comp_result = __UINT__(self.registers[instruction.Op1.reg].value - right_oper_value)
                 self.flags.set_carry_sub(comp_result.value, org_reg_value)
                 self.flags.set_overflow_sub(comp_result.value, org_reg_value, right_oper_value)
-
-                if comp_result.value == 0:
-                    self.flags.zero = True
                 self.flags.update(comp_result.value)
                 return True
 
@@ -327,8 +324,6 @@ class CpuContext:
 
             case ida_allins.NN_test:
                 test_result = self.registers[instruction.Op1.reg].value & right_oper_value
-                if test_result == 0:
-                    self.flags.zero = True
                 self.flags.update(test_result)
                 return True
 
@@ -449,10 +444,6 @@ def main(effective_address: idaapi.ea_t = idc.here(),
     idc.jumpto(effective_address)
     return 0
 
-def helper_main_conditions(eval_start: idaapi.ea_t, jump_count: int, effective_address: idaapi.ea_t, instruction: ida_ua.insn_t)->None:
-
-    return
-
 def helper_delta(instruction: ida_ua.insn_t)->int:
     addresses_delta: idaapi.ea_t = instruction.Op1.addr - instruction.size - instruction.ea
 
@@ -502,15 +493,11 @@ def regs_msg(register_name: str, instruction: ida_ua.insn_t)->None: return print
 
 def lazy_msg(unhandled_flag: str)->None                           : return print(f'This instruction uses a {unhandled_flag}, start handling it ya lazy dev.')
 
-def unhandled_jump_msg(jump_name: str)->bool:
-    print(f'[!] Hit an unhandled jump of type {jump_name} returning False')
-    return False
+def contains_imm(operand_types: list[int])->bool                  : return ida_ua.o_imm in operand_types
 
-def contains_imm(operand_types: list[int])->bool : return ida_ua.o_imm in operand_types
+def contains_near(operand_types: list[int])->bool                 : return idaapi.o_near in operand_types
 
-def contains_near(operand_types: list[int])->bool: return idaapi.o_near in operand_types
-
-def contains_reg(operand_types: list[int])->bool : return ida_ua.o_reg in operand_types
+def contains_reg(operand_types: list[int])->bool                  : return ida_ua.o_reg in operand_types
 
 def get_operands_types(operand_objects: list[ida_ua.op_t] | None = None, instruction: ida_ua.insn_t | None = None)->list[int]:
     try:
@@ -563,26 +550,26 @@ def is_junk_condition(current_exec_instruction: ida_ua.insn_t, eval_start: idaap
 
 def are_skipped_instructions_junk(instruction: ida_ua.insn_t)->bool:
     addresses_delta: int = helper_delta(instruction)
-    if not addresses_delta: return False
-    if addresses_delta >= 0x800: return False
+
+    if not addresses_delta       : return False
+    elif addresses_delta >= 0x800: return False
+
     eval_instruction: ida_ua.insn_t = instruction
-    next_addr: idaapi.ea_t = instruction.ea + instruction.size
+    next_addr       : idaapi.ea_t   = instruction.ea + instruction.size
 
     while next_addr <= instruction.Op1.addr:
-        second_referer: idaapi.ea_t = ida_xref.get_next_cref_to(eval_instruction.ea,
-                                                                ida_xref.get_first_cref_to(eval_instruction.ea))
+        second_referer: idaapi.ea_t = ida_xref.get_next_cref_to(eval_instruction.ea, ida_xref.get_first_cref_to(eval_instruction.ea))
 
-        if second_referer != idc.BADADDR and second_referer != idc.BADADDR != instruction.ea: return False
-
+        if second_referer != idc.BADADDR and second_referer != idc.BADADDR != instruction.ea:
+            return False
 
         elif not ida_bytes.is_code(ida_bytes.get_flags(next_addr)):
 
             match are_skipped_unexplored_bytes_junk(next_addr, instruction.Op1.addr):
 
                 case SkippedDataState.FINISHED_IS_NOT_JUNK: return False
-                case SkippedDataState.FINISHED_IS_JUNK: return True
-                case SkippedDataState.NOT_FINISHED_IS_CODE:
-                    continue
+                case SkippedDataState.FINISHED_IS_JUNK    : return True
+                case SkippedDataState.NOT_FINISHED_IS_CODE: continue
 
         eval_instruction = idautils.DecodeInstruction(next_addr)
         next_addr        = eval_instruction.ea + eval_instruction.size
@@ -602,8 +589,7 @@ def are_skipped_unexplored_bytes_junk(effective_address: idaapi.ea_t, destinatio
             continue
 
         if ida_xref.get_next_cref_to(effective_address, first_xref) != idc.BADADDR: return SkippedDataState.FINISHED_IS_NOT_JUNK
-
-        elif ida_bytes.is_code(ida_bytes.get_flags(effective_address)): return SkippedDataState.NOT_FINISHED_IS_CODE
+        elif ida_bytes.is_code(ida_bytes.get_flags(effective_address))            : return SkippedDataState.NOT_FINISHED_IS_CODE
 
     return SkippedDataState.FINISHED_IS_JUNK
 

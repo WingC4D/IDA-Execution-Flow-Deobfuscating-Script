@@ -85,20 +85,20 @@ class StackFrame:
 
         self.data[stack_data.base_offset] = stack_data
 
-    def handle_stack_operation_imm(self, instruction: ida_ua.insn_t)->int:
+    def handle_stack_operation_imm(self, instruction: ida_ua.insn_t, oper_value: int)->int:
         """This method handles the "StackFrame" class' data members when a PUSH or a POP operation is identified.\n
         This method returns the current stack offset to help evaluate the SP correctness."""
         try:
             match instruction.itype:
                 case ida_allins.NN_mov:
-                    if instruction.Op1.reg == idautils.procregs.esp.reg:
-                        if instruction.Op2.reg == idautils.procregs.ebp.reg:
+                    if instruction.Op1.type == ida_ua.o_reg and instruction.Op1.reg == idautils.procregs.esp.reg:
+                        if instruction.Op2.type == ida_ua.o_reg and instruction.Op2.reg == idautils.procregs.ebp.reg:
                             self.create_called_frame(idautils.DecodePreviousInstruction(instruction.ea))
+
                 case ida_allins.NN_push:
                     self.top += 0x4
                     if instruction.Op1 == ida_ua.o_imm:
                         self.add_data(StackData(instruction.Op1.value, self.base + self.top, 4, self.top))
-
 
                 case ida_allins.NN_pop:
                     self.top -= 0x4
@@ -111,17 +111,17 @@ class StackFrame:
 
                 case ida_allins.NN_add:
                     if instruction.Op1.reg == idautils.procregs.esp.reg:
-                        self.top -= instruction.Op2.value
+                        self.top -= oper_value
 
                     elif instruction.Op1.reg == idautils.procregs.ebp.reg:
-                        self.base += instruction.Op2.valu
+                        self.base += oper_value
 
                 case ida_allins.NN_sub:
                     if instruction.Op1.reg == idautils.procregs.esp.reg:
-                        self.top += instruction.Op2.value
+                        self.top += oper_value
 
                     elif instruction.Op1.reg == idautils.procregs.ebp.reg:
-                        self.base += instruction.Op2.value
+                        self.base += oper_value
 
                 case default:
                     raise NotImplementedError
@@ -154,7 +154,7 @@ class FlagsContext:
     def __repr__(self)->str: return f"""Flag States:
         \tZF = {int(self.zero)}\tPF = {int(self.parity)}\tAF = {int(self.auxiliary_carry)}
         \tOF = {int(self.overflow)}\tSF = {int(self.sign)}\tDF = {int(self.direction)}
-        \tCF = {int(self.carry)}\tTF= {int(self.trap)}\t IF = {int(self.interrupt)}"""
+        \tCF = {int(self.carry)}\tTF = {int(self.trap)}\tIF = {int(self.interrupt)}"""
 
     @staticmethod
     def _check_sign(value)->bool: return value & MSB_MASK != 0
@@ -184,10 +184,12 @@ class FlagsContext:
 
     def set_parity(self, result: int)->None:
         least_significant_byte: int = result & 0xFF
-        bits_set_to_1: int = 0
-        curr_bit: int = 1
+        bits_set_to_1         : int = 0
+        curr_bit              : int = 1
         while curr_bit <= 0x80:
-            if curr_bit & least_significant_byte: bits_set_to_1 += 1
+            if curr_bit & least_significant_byte:
+                bits_set_to_1 += 1
+
             curr_bit <<= 1
         self.parity = bits_set_to_1 % 2 == 0
         return
@@ -368,8 +370,10 @@ def main(effective_address: idaapi.ea_t = idc.here(),
          jump_count       : int         = 0)->int:
     stack       : StackFrame        = StackFrame(effective_address)
     eval_start  : idaapi.ea_t       = effective_address
-    while jump_count < __JUMP_LIMIT__:
+    while True:
         context.registers[idautils.procregs.eip.reg].value = effective_address
+        if jump_count >= __JUMP_LIMIT__:
+            break
         instruction : ida_ua.insn_t     = idautils.DecodeInstruction(effective_address)
         if not instruction:
             print(f'[✕] Not code @{effective_address:x}, breaking the loop.')
@@ -388,8 +392,28 @@ def main(effective_address: idaapi.ea_t = idc.here(),
                 break
 
         elif instruction.itype in __STACK_OPS__:
+
             print('stack')
-            stack.handle_stack_operation_imm(instruction)
+            if instruction.Op1.type == ida_ua.o_imm:
+                right_oper_value: int = instruction.Op1.value
+
+            elif instruction.Op1.type == ida_ua.o_reg:
+                right_oper_value: int = context.registers[instruction.Op1.reg].value
+
+            elif instruction.Op1.type == ida_ua.o_displ:
+
+                if instruction.Op1.phrase == idautils.procregs.ebp.reg:
+                    right_oper_value = stack.data[instruction.Op1.addr].data
+
+                elif instruction.Op1.phrase == idautils.procregs.esp.reg:
+                    right_oper_value = stack.data[stack.top + instruction.Op1.addr].data
+
+                else:
+                    break
+            else:
+                idc.jumpto(effective_address)
+                break
+            stack.handle_stack_operation_imm(instruction, right_oper_value)
 
         elif instruction.itype in __COMPARATIVE__:
             if  not context.update_regs_n_flags_imm(instruction):
@@ -410,6 +434,7 @@ def main(effective_address: idaapi.ea_t = idc.here(),
                 if not handle_forward_movement(instruction):
                     print('[✕] Handle Forward Movement Failed! breaking the loop')
                     break
+                jump_count       += 1
                 effective_address = instruction.Op1.addr
             continue
 

@@ -4,7 +4,7 @@ import idaapi, idc, idautils, ida_allins, ida_bytes, ida_xref, ida_auto, ida_ua,
 __16bit__      : bool      = idaapi.inf_is_16bit()
 __32bit__      : bool      = idaapi.inf_is_32bit_exactly()
 __64bit__      : bool      = idaapi.inf_is_64bit()
-__JUMP_LIMIT__ : int       = 0x2
+__JUMP_LIMIT__ : int       = 0x3
 __OPER_COUNT__ : int       = 0x8
 __ARITHMETIC__ : list[int] = [ida_allins.NN_add, ida_allins.NN_sub, ida_allins.NN_inc, ida_allins.NN_dec, ida_allins.NN_mul, ida_allins.NN_div, ida_allins.NN_mov]
 __COMPARATIVE__: list[int] = [ida_allins.NN_cmp, ida_allins.NN_test]
@@ -44,7 +44,7 @@ class SkippedDataState(enum.Enum):
 
 class Data:
     def __init__(self,
-                 data   : int | str | idaapi.ea_t,
+                 data   : int | str | object | list| idaapi.ea_t,
                  size   : int,
                  address: idaapi.ea_t):
         self.data = data
@@ -53,7 +53,7 @@ class Data:
 
 class StackData(Data):
     def __init__(self,
-                 data       : int | str | idaapi.ea_t | object | list,
+                 data       : int | str | object | list | idaapi.ea_t,
                  address    : idaapi.ea_t,
                  size       : int,
                  base_offset: int)->None:
@@ -76,14 +76,18 @@ class StackFrame:
         self.data      : dict              = {}
         self.prev_frame: StackFrame | None = calling_frame
         self.next_frame: StackFrame | None = None
-        self.depth = depth
+        self.depth     : int               = depth
 
     def __repr__(self)->str:
-        return f"""{'\t' * self.depth}@{self.start_addr} Frame:\n{'\t' * self.depth}
-        Current Base Address: {self.start_addr + self.base}\n{'\t' * self.depth}
-        Current Stack Offset: {self.top} \n{'\t' * self.depth}
-        Stack Data:\n{'\n' + ('\t' * (self.depth + 1)).join([f'{str(data_addr):x}: {data_obj.data}' for data_addr, data_obj in self.data.items()])}
-        """
+        normal_new_line: str = '\n ' + ('\t' * self.depth)
+        stack_data_new_line: str = '\n ' + ('\t' * (self.depth + 1))
+        return f"""{'\t' * self.depth}@{self.start_addr:x} Frame:
+    {normal_new_line}Current Base Address: {(self.start_addr + self.base):x}
+    {normal_new_line}Current Stack Offset: {self.top:x}
+    {normal_new_line}Stack Depth: {self.depth}
+    {normal_new_line}Stack Data:
+    {stack_data_new_line.join([f'{data_addr:x}: {data_obj.data:x}' for data_addr, data_obj in self.data.items()])}
+    """
 
     def add_data(self, stack_data: StackData)->None:
         if stack_data.base_offset > self.top:
@@ -103,11 +107,12 @@ class StackFrame:
                         raise NotImplementedError
 
                 case ida_allins.NN_push:
-                    self.add_data(StackData(oper_value, self.start_addr + self.top, 4, self.top))
                     self.top += 0x4
+                    self.add_data(StackData(oper_value, self.start_addr + self.top, 4, self.top))
+
 
                 case ida_allins.NN_pop:
-                    popped_data: int = self.data[self.top].data
+                    popped_data: int = self.data.pop(self.top).data
                     self.top -= 0x4
                     return popped_data
 
@@ -139,7 +144,7 @@ class StackFrame:
         except NotImplementedError:
             return -1
 
-    def create_called_frame(self, frame_start_address: idaapi.ea_t)->object:
+    def create_called_frame(self, frame_start_address: idaapi.ea_t):
         self.next_frame: StackFrame = StackFrame(frame_start_address, self, self.depth + 1)
         return self.next_frame
 
@@ -407,7 +412,6 @@ def main(effective_address: idaapi.ea_t = idc.here(),
                 break
 
         elif instruction.itype in __STACK_OPS__:
-            print('stack')
             if instruction.Op1.type == ida_ua.o_imm:
                 right_oper_value: int = instruction.Op1.value
 
@@ -428,6 +432,7 @@ def main(effective_address: idaapi.ea_t = idc.here(),
                 idc.jumpto(effective_address)
                 break
             stack.handle_stack_operation(instruction, right_oper_value)
+            print(stack)
 
         elif instruction.itype in __COMPARATIVE__:
             if  not context.update_regs_n_flags(instruction):
@@ -462,7 +467,6 @@ def main(effective_address: idaapi.ea_t = idc.here(),
 
         elif ida_allins.NN_call <= instruction.itype <= ida_allins.NN_callni:
             print(f'[i] Called @{instruction.Op1.addr:x} from {instruction.ea:x}')
-
             if not handle_forward_movement(instruction):
                 print('[✕] Handle Forward Movement Failed! breaking the loop')
                 break
@@ -470,6 +474,10 @@ def main(effective_address: idaapi.ea_t = idc.here(),
             effective_address = instruction.Op1.addr
             eval_start        = effective_address
             jump_count       += 1
+            if not are_skipped_instructions_junk(instruction):
+                stack.create_called_frame(effective_address)
+                print("[!] Created a Called Frame!")
+                stack = stack.next_frame
             continue
 
         else:
@@ -587,8 +595,7 @@ def is_junk_condition(current_exec_instruction: ida_ua.insn_t, eval_start: idaap
     return False
 
 def are_skipped_instructions_junk(instruction: ida_ua.insn_t)->bool:
-    addresses_delta: int = helper_delta(instruction)
-
+    addresses_delta              : int = helper_delta(instruction)
     if not addresses_delta       : return False
     elif addresses_delta >= 0x800: return False
 
@@ -619,8 +626,8 @@ def are_skipped_unexplored_bytes_junk(effective_address: idaapi.ea_t, destinatio
 
     while current_address <= destination_address:
 
-        first_xref: int    = ida_xref.get_first_cref_to(effective_address)
-        effective_address += 1
+        first_xref: int  = ida_xref.get_first_cref_to(effective_address)
+        current_address += 1
 
         if not first_xref:
             print(f'[i] Skipped unexplored byte @{effective_address:x} is not referenced by ANY code')

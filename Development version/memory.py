@@ -61,11 +61,12 @@ class StackFrame:
                         raise NotImplementedError
 
                 case ida_allins.NN_push:
-                    self.add_data(StackData(oper_value, self.start_addr + self.top, 4, self.top))
                     self.top += 0x4
+                    self.add_data(StackData(oper_value, self.start_addr + self.top, 4, self.top))
+
 
                 case ida_allins.NN_pop:
-                    popped_data: int = self.data[self.top].data
+                    popped_data: int = self.data.pop(self.top).data
                     self.top -= 0x4
                     return popped_data
 

@@ -22,20 +22,26 @@ class StackData(Data):
 class StackFrame:
     """Stack Frame:
     A Doubly Linked List holding all data variables and their metadata
-
-     start_address - """
+    """
     def __init__(self,
                  start_address: idaapi.ea_t,
-                 sp_delta     : int           = 0,
-                 bp_delta     : int           = 0,
-                 calling_frame: object | None = None)->None:
+                 calling_frame: object | None = None,
+                 depth        : int = 0)->None:
 
-        self.start     : idaapi.ea_t       = start_address
-        self.base      : int               = bp_delta
-        self.top       : int               = sp_delta
+        self.start_addr: idaapi.ea_t       = start_address
+        self.base      : int               = 0
+        self.top       : int               = 0
         self.data      : dict              = {}
         self.prev_frame: StackFrame | None = calling_frame
         self.next_frame: StackFrame | None = None
+        self.depth = depth
+
+    def __repr__(self)->str:
+        return f"""{'\t' * self.depth}@{self.start_addr} Frame:\n{'\t' * self.depth}
+        Current Base Address: {self.start_addr + self.base}\n{'\t' * self.depth}
+        Current Stack Offset: {self.top} \n{'\t' * self.depth}
+        Stack Data:\n{'\n' + ('\t' * (self.depth + 1)).join([f'{str(data_addr):x}: {data_obj.data}' for data_addr, data_obj in self.data.items()])}
+        """
 
     def add_data(self, stack_data: StackData)->None:
         if stack_data.base_offset > self.top:
@@ -43,23 +49,25 @@ class StackFrame:
 
         self.data[stack_data.base_offset] = stack_data
 
-    def handle_stack_operation_imm(self, instruction: ida_ua.insn_t, oper_value: int)->int:
+    def handle_stack_operation(self, instruction: ida_ua.insn_t, oper_value: int)->int:
         """This method handles the "StackFrame" class' data members when a PUSH or a POP operation is identified.\n
         This method returns the current stack offset to help evaluate the SP correctness."""
         try:
             match instruction.itype:
                 case ida_allins.NN_mov:
-                    if instruction.Op1.type == ida_ua.o_reg and instruction.Op1.reg == idautils.procregs.esp.reg:
-                        if instruction.Op2.type == ida_ua.o_reg and instruction.Op2.reg == idautils.procregs.ebp.reg:
-                            self.create_called_frame(idautils.DecodePreviousInstruction(instruction.ea))
+                    if instruction.Op1.type == ida_ua.o_reg and instruction.Op1.reg == idautils.procregs.ebp.reg:
+                        self.data[self.top] = StackData(oper_value, self.start_addr + self.top, 4, self.top)
+                    else:
+                        raise NotImplementedError
 
                 case ida_allins.NN_push:
+                    self.add_data(StackData(oper_value, self.start_addr + self.top, 4, self.top))
                     self.top += 0x4
-                    if instruction.Op1 == ida_ua.o_imm:
-                        self.add_data(StackData(instruction.Op1.value, self.base + self.top, 4, self.top))
 
                 case ida_allins.NN_pop:
+                    popped_data: int = self.data[self.top].data
                     self.top -= 0x4
+                    return popped_data
 
                 case ida_allins.NN_popa:
                     self.top -= 0x14
@@ -89,6 +97,6 @@ class StackFrame:
         except NotImplementedError:
             return -1
 
-    def create_called_frame(self, frame_start_address: idaapi.ea_t, sp_delta: int = 0, bp_delta: int = 0)->None:
-        self.next_frame            = StackFrame(frame_start_address, sp_delta, bp_delta)
-        self.next_frame.prev_frame = self
+    def create_called_frame(self, frame_start_address: idaapi.ea_t)->object:
+        self.next_frame: StackFrame = StackFrame(frame_start_address, self, self.depth + 1)
+        return self.next_frame

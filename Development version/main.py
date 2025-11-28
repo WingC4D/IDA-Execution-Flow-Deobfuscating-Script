@@ -8,11 +8,12 @@ def main(effective_address: idaapi.ea_t = idc.here(),
          jump_count       : int         = 0)->int:
     stack       : StackFrame        = StackFrame(effective_address)
     eval_start  : idaapi.ea_t       = effective_address
+    instruction : ida_ua.insn_t
     while True:
         context.registers[idautils.procregs.eip.reg].value = effective_address
         if jump_count >= __JUMP_LIMIT__:
             break
-        instruction : ida_ua.insn_t     = idautils.DecodeInstruction(effective_address)
+        instruction = idautils.DecodeInstruction(effective_address)
         if not instruction:
             print(f'[✕] Not code @{effective_address:x}, breaking the loop.')
             break
@@ -21,16 +22,19 @@ def main(effective_address: idaapi.ea_t = idc.here(),
             idc.jumpto(effective_address)
             break
 
-        elif ida_ua.o_displ in get_operands_types(get_operand_objects(instruction)):
-            print("[!] Hit an instruction with an operand of type: DISPLACEMENT")
-
         elif instruction.itype in __ARITHMETIC__:
-            if  not context.update_regs_n_flags_imm(instruction):
+            if instruction.Op1.type == instruction.Op2.type:
+                if instruction.Op1.type == ida_ua.o_reg:
+                    if instruction.Op1.reg == idautils.procregs.ebp.reg:
+                        if instruction.Op2.reg == idautils.procregs.esp.reg:
+                            stack.handle_stack_operation(instruction, context.reg_sp)
+                            stack.create_called_frame(eval_start)
+                            print(stack)
+            if  not context.update_regs_n_flags(instruction):
                 idc.jumpto(effective_address)
                 break
 
         elif instruction.itype in __STACK_OPS__:
-
             print('stack')
             if instruction.Op1.type == ida_ua.o_imm:
                 right_oper_value: int = instruction.Op1.value
@@ -51,15 +55,15 @@ def main(effective_address: idaapi.ea_t = idc.here(),
             else:
                 idc.jumpto(effective_address)
                 break
-            stack.handle_stack_operation_imm(instruction, right_oper_value)
+            stack.handle_stack_operation(instruction, right_oper_value)
 
         elif instruction.itype in __COMPARATIVE__:
-            if  not context.update_regs_n_flags_imm(instruction):
+            if  not context.update_regs_n_flags(instruction):
                 idc.jumpto(effective_address)
                 break
 
         elif instruction.itype in __BITWISE_OPS__:
-            if  not context.update_regs_n_flags_imm(instruction):
+            if  not context.update_regs_n_flags(instruction):
                 idc.jumpto(effective_address)
                 break
 
@@ -98,11 +102,10 @@ def main(effective_address: idaapi.ea_t = idc.here(),
 
         else:
             idc.jumpto(effective_address)
-            print("[?] But, What Is This?!")
+            print(f"[?] But, What Is That?! @{effective_address:x}")
             break
 
         effective_address += instruction.size
-        instruction = idautils.DecodeInstruction(effective_address)
     print(context)
     idc.jumpto(effective_address)
     return 0

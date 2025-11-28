@@ -5,13 +5,13 @@ class FlagsContext:
     This class holds context to all (currently 32bit) flags used by conditional execution opcodes
     """
     def __init__(self)->None:
-        self.zero           : bool = False
-        self.parity         : bool = False
-        self.auxiliary_carry: bool = False
-        self.overflow       : bool = False
-        self.direction      : bool = False
         self.sign           : bool = False
         self.carry          : bool = False
+        self.zero           : bool = False
+        self.parity         : bool = False
+        self.overflow       : bool = False
+        self.direction      : bool = False
+        self.auxiliary_carry: bool = False
         self.trap           : bool = False
         self.interrupt      : bool = False
 
@@ -37,32 +37,29 @@ class FlagsContext:
             self.overflow = self._check_sign(value_b) != self._check_sign(result)
         else:
             self.overflow = False
-        return
 
     def set_overflow_sub(self, result: int, org_value_a: int, value_b: int)->None:
         if self._check_sign(org_value_a) != self._check_sign(value_b):
             self.overflow = self._check_sign(value_b) == self._check_sign(result)
         else:
             self.overflow = False
-        return
 
     def set_parity(self, result: int)->None:
         least_significant_byte: int = result & 0xFF
         bits_set_to_1         : int = 0
         curr_bit              : int = 1
         while curr_bit <= 0x80:
+
             if curr_bit & least_significant_byte:
                 bits_set_to_1 += 1
 
             curr_bit <<= 1
         self.parity = bits_set_to_1 % 2 == 0
-        return
 
     def reset(self)->None:
         self.carry, self.overflow, self.sign, self.zero, self.parity = False, False, False, False, False
 
     def update(self, result: int)->None:
-        self.zero = result == 0
+        self.zero  = result == 0
         self.set_parity(result)
         self.set_sign(result)
-        return

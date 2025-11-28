@@ -16,17 +16,23 @@ class CpuContext:
     """
 
     def __init__(self):
-        self.registers: dict = {
-            idautils.procregs.eax.reg: __UINT__(0),
-            idautils.procregs.ebx.reg: __UINT__(0),
-            idautils.procregs.ecx.reg: __UINT__(0),
-            idautils.procregs.edx.reg: __UINT__(0),
-            idautils.procregs.edi.reg: __UINT__(0),
-            idautils.procregs.esi.reg: __UINT__(0),
-            idautils.procregs.ebp.reg: __UINT__(0),
-            idautils.procregs.esp.reg: __UINT__(0),
-            idautils.procregs.eip.reg: __UINT__(0)
-        }
+        try:
+            if __32bit__:
+                self.registers: dict = {
+                    idautils.procregs.eax.reg: __UINT__(0),
+                    idautils.procregs.ebx.reg: __UINT__(0),
+                    idautils.procregs.ecx.reg: __UINT__(0),
+                    idautils.procregs.edx.reg: __UINT__(0),
+                    idautils.procregs.edi.reg: __UINT__(0),
+                    idautils.procregs.esi.reg: __UINT__(0),
+                    idautils.procregs.ebp.reg: __UINT__(0),
+                    idautils.procregs.esp.reg: __UINT__(0),
+                    idautils.procregs.eip.reg: __UINT__(0)
+                }
+            else:
+                raise NotImplementedError
+        except NotImplementedError:
+            exit(f"Currently only handles 32bit processors")
 
         self.flags: FlagsContext = FlagsContext()
 
@@ -52,7 +58,7 @@ class CpuContext:
     def reg_bp(self): return self.registers[idautils.procregs.ebp.reg].value
 
     @property
-    def reg_sp(self): return self.registers[idautils.procregs.esp.reg].value
+    def reg_sp(self)->int: return self.registers[idautils.procregs.esp.reg].value
 
     @property
     def reg_ip(self): return self.registers[idautils.procregs.eip.reg].value
@@ -72,12 +78,12 @@ class CpuContext:
 	
     - {self.flags}\n"""
 
-    def update_regs_n_flags_imm(self, instruction: ida_ua.insn_t)->bool:
+    def update_regs_n_flags(self, instruction: ida_ua.insn_t)->bool:
         if instruction.Op2.type == ida_ua.o_reg:
             right_oper_value: int = self.registers[instruction.Op2.reg].value
         else:
             right_oper_value = instruction.Op2.value
-        org_reg_value  : int = self.registers[instruction.Op1.reg].value
+        org_reg_value: int = self.registers[instruction.Op1.reg].value
         if instruction.itype == ida_allins.NN_mov:
             self.registers[instruction.Op1.reg].value = right_oper_value
             return True

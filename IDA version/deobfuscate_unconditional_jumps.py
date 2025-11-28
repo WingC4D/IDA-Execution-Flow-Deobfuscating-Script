@@ -496,11 +496,11 @@ def handle_forward_movement(instruction: ida_ua.insn_t)->bool:
 
     return False
 
-def exec_flow_shift_msg(instruction: ida_ua.insn_t)->None: return print(f'jumped to {instruction.Op1.addr:x} from {instruction.ea:x}')
+def exec_flow_shift_msg(instruction: ida_ua.insn_t)->None         : return print(f'jumped to {instruction.Op1.addr:x} from {instruction.ea:x}')
 
 def regs_msg(register_name: str, instruction: ida_ua.insn_t)->None: return print(f'Found a reference to {register_name} @{instruction.ea:x}')
 
-def lazy_msg(unhandled_flag: str)->None: return print(f'This instruction uses a {unhandled_flag}, start handling it ya lazy dev.')
+def lazy_msg(unhandled_flag: str)->None                           : return print(f'This instruction uses a {unhandled_flag}, start handling it ya lazy dev.')
 
 def unhandled_jump_msg(jump_name: str)->bool:
     print(f'[!] Hit an unhandled jump of type {jump_name} returning False')
@@ -510,7 +510,7 @@ def contains_imm(operand_types: list[int])->bool : return ida_ua.o_imm in operan
 
 def contains_near(operand_types: list[int])->bool: return idaapi.o_near in operand_types
 
-def contains_reg(operand_types: list[int])->bool: return ida_ua.o_reg in operand_types
+def contains_reg(operand_types: list[int])->bool : return ida_ua.o_reg in operand_types
 
 def get_operands_types(operand_objects: list[ida_ua.op_t] | None = None, instruction: ida_ua.insn_t | None = None)->list[int]:
     try:
@@ -536,9 +536,9 @@ def get_operand_objects(instruction: ida_ua.insn_t)->list[ida_ua.op_t]:
         result.append(instruction[i])
     return result
 
-def is_arithmetic(instruction: ida_ua.insn_t)->bool: return instruction.itype in __ARITHMETIC__
+def is_arithmetic(instruction: ida_ua.insn_t)->bool   : return instruction.itype in __ARITHMETIC__
 
-def is_cond_jump(instruction: ida_ua.insn_t)->bool: return ida_allins.NN_ja <= instruction.itype <= ida_allins.NN_jz
+def is_cond_jump(instruction: ida_ua.insn_t)->bool    : return ida_allins.NN_ja <= instruction.itype <= ida_allins.NN_jz
 
 def is_non_cond_jump(instruction: ida_ua.insn_t)->bool: return ida_allins.NN_jmp <= instruction.itype <= ida_allins.NN_jmpshort
 

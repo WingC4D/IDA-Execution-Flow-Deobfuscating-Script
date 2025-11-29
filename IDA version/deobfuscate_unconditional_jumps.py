@@ -78,7 +78,7 @@ class StackData(Data):
 
         self.base_offset = base_offset
 
-    def __repr__(self): return f'{hex(self.base_offset):8}: {self.data} | {self.size} bytes\n'
+    def __repr__(self): return f'{self.base_offset:x8}: {self.data} | {self.size} bytes\n'
 
 class StackFrame:
     """Stack Frame:
@@ -89,7 +89,7 @@ class StackFrame:
                  calling_frame: object | None = None,
                  depth        : int = 0)->None:
 
-        self.start_addr: ea_t       = start_address
+        self.start_addr    : ea_t       = start_address
         self.base          : ea_t              = 0
         self.top           : ea_t              = 0
         self.data          : dict              = {}
@@ -105,9 +105,9 @@ class StackFrame:
 {normal_new_line}Current Base Address: {(self.start_addr + self.base):x}
 {normal_new_line}Current Stack Offset: {self.top:x}
 {normal_new_line}Stack Depth: {self.depth}
-{normal_new_line}Stack Data:
- {(normal_new_line + '\t').join([data_obj.__repr__() for data_addr, data_obj in self.data.items()])}
-    """
+{normal_new_line}Stack Data:{"{"}
+{'\t' + (normal_new_line + '\t').join([data_obj.__repr__() for data_addr, data_obj in self.data.items()])}
+{'}'}"""
 
     def add_data(self, stack_data: StackData)->None:
         if stack_data.base_offset > self.top:
@@ -139,8 +139,6 @@ class StackFrame:
                 case ida_allins.NN_push:
                     self.top += 0x4
                     self.add_data(StackData(oper_value, self.start_addr + self.top, 4, self.top, DataTypes.DWORD))
-
-
 
                 case ida_allins.NN_pop:
                     popped_data: int = self.data.pop(self.top_stored_var).data
@@ -180,8 +178,7 @@ class StackFrame:
         return self.next_frame
 
 class FlagsContext:
-    """
-    Flags Context:\n
+    """Flags Context:\n
     This class holds context to all (currently 32bit) flags used by conditional execution opcodes
     """
     def __init__(self)->None:
@@ -306,8 +303,7 @@ class CpuContext:
     @property
     def reg_ip(self): return self.registers[procregs.eip.reg].value
 
-    def __repr__(self)->str: return f"""
-CPU Context:
+    def __repr__(self)->str: return f"""CPU Context:
 - Architecture: {__sBITS__}bit Intel || AMD\n\n- Integer Registers:\n\tReg_AX: {hex(self.reg_ax)}
 \tReg_BX: {hex(self.reg_bx)}
 \tReg_CX: {hex(self.reg_cx)}
@@ -325,7 +321,9 @@ CPU Context:
             right_oper_value: int = self.registers[instruction.Op2.reg].value
         else:
             right_oper_value = instruction.Op2.value
+
         org_reg_value: int = self.registers[instruction.Op1.reg].value
+
         if instruction.itype == ida_allins.NN_mov:
             self.registers[instruction.Op1.reg].value = right_oper_value
             return True
@@ -462,6 +460,10 @@ class InstructionHelper:
             current_address += 1
         return SkippedDataState.FINISHED_IS_JUNK, current_address
 
+    def contains_displ(self):
+        self.validate_operands()
+        return ida_ua.o_displ in self.operand_types
+
     def contains_imm( self)->bool:
         self.validate_operands()
         return ida_ua.o_imm  in self.operand_types
@@ -470,7 +472,11 @@ class InstructionHelper:
         self.validate_operands()
         return ida_ua.o_imm in self.operand_types
 
-    def contains_reg( self)->bool:
+    def contains_phrase(self)->bool:
+        self.validate_operands()
+        return ida_ua.o_phrase in self.operand_types
+
+    def contains_reg(self)->bool:
         self.validate_operands()
         return ida_ua.o_reg  in self.operand_types
 
@@ -562,7 +568,6 @@ class InstructionHelper:
         self.operands       = []
         self. operand_types = []
 
-
 def main(effective_address: ea_t       = idc.here(),
          context          : CpuContext        = CpuContext(),
          jump_count       : int               = 0,
@@ -588,12 +593,16 @@ def main(effective_address: ea_t       = idc.here(),
 
         elif instruction.itype in __ARITHMETIC__:
             if instruction.Op1.type == ida_ua.o_reg:
-               if instruction.Op1.reg in [procregs.ebp.reg, procregs.esp.reg]:
+                if instruction.Op1.reg in [procregs.ebp.reg, procregs.esp.reg]:
+                    stack.handle_stack_operation(instruction, context.registers[instruction.Op1.reg].value)
                     if instruction.Op1.type == instruction.Op2.type:
-                        stack.handle_stack_operation(instruction, context.registers[instruction.Op1.reg])
+
+
                         if instruction.Op2.reg == procregs.esp.reg:
                             stack.create_called_frame(eval_start)
                             print(stack)
+                    elif instruction.Op2.type == ida_ua.o_imm:
+                        stack.handle_stack_operation(instruction, instruction.Op2.value)
 
 
             if not context.update_regs_n_flags(instruction):

@@ -43,7 +43,7 @@ except RuntimeError:
 
 class SkippedDataState(enum.Enum):
     FINISHED_IS_NOT_JUNK = 0
-    FINISHED_IS_JUNK     = 1
+    FINISHED_IS_JUNK     = 11111
     NOT_FINISHED_IS_CODE = 2
 
 class DataTypes(enum.Enum):
@@ -595,15 +595,11 @@ def main(effective_address: ea_t       = idc.here(),
                 if instruction.Op1.reg in [procregs.ebp.reg, procregs.esp.reg]:
                     stack.handle_stack_operation(instruction, context.registers[instruction.Op1.reg].value)
                     if instruction.Op1.type == instruction.Op2.type:
-
-
                         if instruction.Op2.reg == procregs.esp.reg:
                             stack.create_called_frame(eval_start)
-                            print(stack)
-                    elif instruction.Op2.type == ida_ua.o_imm:
-                        stack.handle_stack_operation(instruction, instruction.Op2.value)
-
-
+                        elif instruction.Op2.type == ida_ua.o_imm:
+                            stack.handle_stack_operation(instruction, instruction.Op2.value)
+                        print(stack)
             if not context.update_regs_n_flags(instruction):
                 idc.jumpto(effective_address)
                 break

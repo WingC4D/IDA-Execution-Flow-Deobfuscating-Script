@@ -89,7 +89,7 @@ class StackFrame:
                  calling_frame: object | None = None,
                  depth        : int = 0)->None:
 
-        self.start_addr    : ea_t       = start_address
+        self.start_addr    : ea_t              = start_address
         self.base          : ea_t              = 0
         self.top           : ea_t              = 0
         self.data          : dict              = {}

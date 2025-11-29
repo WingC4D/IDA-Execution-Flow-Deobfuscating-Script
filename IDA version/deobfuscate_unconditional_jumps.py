@@ -23,12 +23,12 @@ try:
         MAX_REG_VALUE: int = 0xFFFFFFFF
 
     elif __64bit__:
-        __sBITS__       : str = '64'
-        __iBITS__       : int = 64
-        MSB_MASK        : int = 0x8000000000000000
-        __UINT__        : object = ctypes.c_uint64
-        MAX_REG_VALUE   : int = 0xFFFFFFFFFFFFFFFF
-        REG_BYTES_SIZE  : int = 8
+        __sBITS__     : str = '64'
+        __iBITS__     : int = 64
+        MSB_MASK      : int = 0x8000000000000000
+        __UINT__      : object = ctypes.c_uint64
+        MAX_REG_VALUE : int = 0xFFFFFFFFFFFFFFFF
+        REG_BYTES_SIZE: int = 8
 
     elif __16bit__:
         __sBITS__    : str = '16'
@@ -60,7 +60,7 @@ class Data:
                  data   : int | str | object | list| ea_t,
                  size   : int,
                  address: ea_t,
-                 dt_type   : DataTypes):
+                 dt_type: DataTypes):
         self.data = data
         self.size = size
         self.addr = address
@@ -572,10 +572,9 @@ def main(effective_address: ea_t       = idc.here(),
          context          : CpuContext        = CpuContext(),
          jump_count       : int               = 0,
          helper           : InstructionHelper = InstructionHelper())->int:
-    stack       : StackFrame        = StackFrame(effective_address)
-    eval_start  : ea_t       = effective_address
-
-    instruction : ida_ua.insn_t
+    stack      : StackFrame    = StackFrame(effective_address)
+    eval_start : ea_t          = effective_address
+    instruction: ida_ua.insn_t
     while True:
         context.registers[procregs.eip.reg].value = effective_address
 

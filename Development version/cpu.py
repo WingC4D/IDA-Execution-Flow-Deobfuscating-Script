@@ -1,6 +1,6 @@
 from flags import FlagsContext
-from my_globals import __UINT__, __sBITS__, __16bit__, __32bit__, __64bit__,ida_allins, idautils, ida_ua
-
+from my_globals import __UINT__, __sBITS__, __32bit__
+import ida_allins, idautils, ida_ua
 class CpuContext:
     """CPU Context Class:\n
     - This class holds context to all registers & flags (currently of a 32bit processor)\n
@@ -76,7 +76,7 @@ class CpuContext:
 	\tReg_SP: {hex(self.reg_sp)}
 	\tReg_IP: {hex(self.reg_ip)}
 	
-    - {self.flags}\n"""
+    -{self.flags}\n"""
 
     def update_regs_n_flags(self, instruction: ida_ua.insn_t)->bool:
         if instruction.Op2.type == ida_ua.o_reg:

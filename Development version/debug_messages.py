@@ -1,7 +1,4 @@
-from my_globals import ida_ua
-def exec_flow_shift_msg(instruction: ida_ua.insn_t)->None: 
-    print(f'jumped to {instruction.Op1.addr:x} from {instruction.ea:x}')
-
+import ida_ua
 def regs_msg(register_name: str, instruction: ida_ua.insn_t)->None: 
     return print(f'Found a reference to {register_name} @{instruction.ea:x}')
 

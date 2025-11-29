@@ -1,4 +1,4 @@
-import ctypes, enum, ida_allins, idaapi, idc, ida_auto, ida_bytes, ida_ua, ida_xref, ida_allins, idautils
+import ctypes, enum, idaapi, ida_allins
 
 # It's a skill issue lol.
 __16bit__      : bool      = idaapi.inf_is_16bit()
@@ -43,3 +43,12 @@ class SkippedDataState(enum.Enum):
     FINISHED_IS_NOT_JUNK = 0
     FINISHED_IS_JUNK     = 1
     NOT_FINISHED_IS_CODE = 2
+
+class DataTypes(enum.Enum):
+    BYTE    = 0x1
+    WORD    = 0x2
+    DWORD   = 0x4
+    QWORD   = 0x8
+    POINTER = 0xC
+    TEB     = 0xF0
+    PEB     = 0xFFA

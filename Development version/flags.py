@@ -15,10 +15,11 @@ class FlagsContext:
         self.trap           : bool = False
         self.interrupt      : bool = False
 
-    def __repr__(self)->str: return f"""Flag States:
-        \tZF = {int(self.zero)}\tPF = {int(self.parity)}\tAF = {int(self.auxiliary_carry)}
-        \tOF = {int(self.overflow)}\tSF = {int(self.sign)}\tDF = {int(self.direction)}
-        \tCF = {int(self.carry)}\tTF = {int(self.trap)}\tIF = {int(self.interrupt)}"""
+    def __repr__(self)->str: return f"""
+Flag States:
+\tZF = {int(self.zero)}\tPF = {int(self.parity)}\tAF = {int(self.auxiliary_carry)}
+\tOF = {int(self.overflow)}\tSF = {int(self.sign)}\tDF = {int(self.direction)}
+\tCF = {int(self.carry)}\tTF = {int(self.trap)}\tIF = {int(self.interrupt)}"""
 
     @staticmethod
     def _check_sign(value)->bool: return value & MSB_MASK != 0

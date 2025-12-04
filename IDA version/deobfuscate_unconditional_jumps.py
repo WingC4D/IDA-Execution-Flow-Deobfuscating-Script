@@ -98,6 +98,16 @@ class StackFrame:
         self.depth         : int               = depth
         self.top_stored_var: ea_t              = 0
 
+    def __eq__(self, other):
+        self.start_addr     = other.start_addr
+        self.base           = other.base
+        self.top            = other.top
+        self.data           = other.data
+        self.prev_frame     = other.prev_frame
+        self.next_frame     = other.next_frame
+        self.depth          = other.depth
+        self.top_stored_var = other.top_stored_var
+
     def __repr__(self)->str:
         normal_new_line: str = '\t' * self.depth
         return f"""

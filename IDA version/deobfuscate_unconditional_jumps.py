@@ -78,7 +78,7 @@ class StackData(Data):
 
         self.base_offset = base_offset
 
-    def __repr__(self): return f'{self.base_offset:x8}: {self.data} | {self.size} bytes\n'
+    def __repr__(self): return f'Offset: {self.base_offset:x} | Data: {self.data:x} | Size: {self.size:x} bytes\n'
 
 class StackFrame:
     """Stack Frame:
@@ -159,7 +159,9 @@ class StackFrame:
                         self.base += oper_value
 
                 case ida_allins.NN_sub:
+                    print("reached the needed case")
                     if instruction.Op1.reg == procregs.esp.reg:
+                        print("reached the seconded needed case")
                         self.top += oper_value
 
                     elif instruction.Op1.reg == procregs.ebp.reg:
@@ -173,8 +175,8 @@ class StackFrame:
         except NotImplementedError:
             exit(-1)
 
-    def create_called_frame(self, frame_start_address: ea_t):
-        self.next_frame: StackFrame = StackFrame(frame_start_address, self, self.depth + 1)
+    def create_called_frame(self, start_address: ea_t):
+        self.next_frame: StackFrame = StackFrame(start_address, self, self.depth + 1)
         return self.next_frame
 
 class FlagsContext:
@@ -593,12 +595,11 @@ def main(effective_address: ea_t       = idc.here(),
         elif instruction.itype in __ARITHMETIC__:
             if instruction.Op1.type == ida_ua.o_reg:
                 if instruction.Op1.reg in [procregs.ebp.reg, procregs.esp.reg]:
-                    stack.handle_stack_operation(instruction, context.registers[instruction.Op1.reg].value)
                     if instruction.Op1.type == instruction.Op2.type:
-                        if instruction.Op2.reg == procregs.esp.reg:
-                            stack.create_called_frame(eval_start)
-                        elif instruction.Op2.type == ida_ua.o_imm:
-                            stack.handle_stack_operation(instruction, instruction.Op2.value)
+                        stack.handle_stack_operation(instruction, context.registers[instruction.Op2.reg].value)
+                    elif instruction.Op2.type == ida_ua.o_imm:
+                        stack.handle_stack_operation(instruction, instruction.Op2.value)
+
                         print(stack)
             if not context.update_regs_n_flags(instruction):
                 idc.jumpto(effective_address)
@@ -661,7 +662,8 @@ def main(effective_address: ea_t       = idc.here(),
 
         elif ida_allins.NN_call <= instruction.itype <= ida_allins.NN_callni:
             print(f'[i] Called @{instruction.Op1.addr:x} from {instruction.ea:x}')
-
+            if not helper.are_skipped_instructions_junk():
+                stack = stack.create_called_frame(instruction.Op1.addr)
             if not helper.handle_forward_movement():
                 print('[✕] Handle Forward Movement Failed! breaking the loop')
                 break

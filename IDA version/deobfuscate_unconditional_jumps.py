@@ -53,8 +53,10 @@ class DataTypes(enum.Enum):
     DWORD   = 0x4
     QWORD   = 0x8
     POINTER = 0xC
-    TEB     = 0xF0
-    PEB     = 0xFFA
+    CHAR    = 0x10
+    STRING  = 0x20
+    TEB     = 0x100
+    PEB     = 0x200
 
 class Data:
     def __init__(self,
@@ -78,9 +80,9 @@ class StackData(Data):
         super().__init__(data, size, address, dt_type)
 
         self.base_offset = base_offset
-        if isinstance(self.data, int):
-            self.data = hex(self.data)
-    def __repr__(self): return f'Offset: {self.base_offset:x} | Data: {self.data} | Size: {self.size:x} bytes\n'
+
+    def __repr__(self):
+        return f'Offset: {self.base_offset:x} | Data: {self.data} | Size: {self.size:x} bytes\n'
 
 class StackFrame:
     """Stack Frame:
@@ -93,14 +95,15 @@ class StackFrame:
                  calling_frame: object | None = None,
                  depth        : int            = 0)->None:
 
-        self.start_addr    : ea_t              = start_address
-        self.base          : ea_t              = base_addr
-        self.top           : ea_t              = top_addr
-        self.data          : dict              = {}
-        self.prev_frame    : StackFrame | None = calling_frame
-        self.next_frame    : StackFrame | None = None
-        self.depth         : int               = depth
-        self.top_stored_var: ea_t              = 0
+        self.start_addr    : ea_t                 = start_address
+        self.base          : ea_t                 = base_addr
+        self.top           : ea_t                 = top_addr
+        self.data          : dict[int, StackData] = {}
+        self.last_index    : int                  = base_addr
+        self.prev_frame    : StackFrame | None    = calling_frame
+        self.next_frame    : StackFrame | None    = None
+        self.depth         : int                  = depth
+        self.top_stored_var: int                  = top_addr
 
     def __eq__(self, other):
         self.start_addr     = other.start_addr
@@ -124,47 +127,43 @@ class StackFrame:
 {normal_new_line + '}'}"""
 
     def add_data(self, stack_data: StackData)->None:
-        if stack_data.base_offset > self.top:
+        if stack_data.base_offset < self.top:
             print(f'[!] Appended outside the frame!')
         offset: int = int(stack_data.base_offset)
         self.data[offset] = stack_data
-        self.top_stored_var = self.top
 
-    def handle_stack_operation(self, instruction: ida_ua.insn_t, oper_value: int)->int:
+
+    def handle_stack_operation(self, instruction: ida_ua.insn_t, oper_value: int | StackData)->int:
         """This method handles the "StackFrame" class' data members when a PUSH or a POP operation is identified.\n
         This method returns the current stack offset to help evaluate the SP correctness."""
         print("stack ops")
         try:
             match instruction.itype:
                 case ida_allins.NN_mov:
-                    if instruction.Op1.type == ida_ua.o_reg:
-                        reg = instruction.Op1.reg
-                    elif instruction.Op1.type == ida_ua.o_displ:
-                        reg = instruction.Op1.phrase
-                    else:
-                        raise NotImplementedError
-
-                    if reg == procregs.ebp.reg:
-                        self.data[self.base + __INT__(instruction.Op1.addr).value] = StackData(oper_value, self.start_addr + self.top, 4, self.base + instruction.Op1.addr, DataTypes.DWORD)
-                    elif reg == procregs.esp.reg:
-                        self.data[self.top + __INT__( instruction.Op1.addr).value] = StackData(oper_value, self.start_addr + self.top, 4, self.top + instruction.Op1.addr, DataTypes.DWORD)
-                    else:
-                        raise NotImplementedError
+                    self.add_data(oper_value)
 
                 case ida_allins.NN_push:
+                    self.last_index = self.top
                     self.top -= 0x4
+                    self.top_stored_var = self.top
                     self.add_data(StackData(oper_value, int(self.start_addr + self.top), 4, self.top, DataTypes.DWORD))
 
                 case ida_allins.NN_pop:
                     popped_data: int = self.data.pop(self.top_stored_var).data
+                    self.last_index = self.top
                     self.top += 0x4
+                    self.top_stored_var = self.top
                     return popped_data
 
                 case ida_allins.NN_popa:
+                    self.last_index = self.top
                     self.top += 0x14
+                    self.top_stored_var = self.top
 
                 case ida_allins.NN_pusha:
+                    self.last_index = self.top
                     self.top -= 0x14
+                    self.top_stored_var = self.top
 
                 case ida_allins.NN_add:
                     if instruction.Op1.reg == procregs.esp.reg:
@@ -778,7 +777,8 @@ def main(effective_address: ea_t       = idc.here(),
                         break
                 case default:
                     break
-
+            size = 4
+            type = DataTypes.DWORD
             if instruction.Op1.type == instruction.Op1.phrase:
                 if instruction.Op1.reg == procregs.esp.reg:
                     right_oper_value = stack.data[stack.top]
@@ -792,29 +792,31 @@ def main(effective_address: ea_t       = idc.here(),
             elif instruction.Op1.type == ida_ua.o_displ:
                 if instruction.Op1.reg == procregs.esp.reg:
                     reg_val = context.reg_sp
-
-
-
-
                 elif instruction.Op1.reg == procregs.ebp.reg:
                     reg_val = context.reg_bp
-
-
                 else:
                     break
+
                 if not isinstance(right_oper_value, StackData):
-                        right_oper_copy = right_oper_value
-                        if 0x30 <= right_oper_copy <= 0x100:
-                            right_oper_copy = chr(right_oper_value)
-                            size = 1
-                            type =DataTypes.BYTE
+                    right_oper_copy = right_oper_value
+
+                    if 0x30 <= right_oper_copy <= 0x100:
+                        right_oper_copy = chr(right_oper_value)
+                        size = 1
+                        type = DataTypes.CHAR
+                        if stack.data[stack.last_index].type in [DataTypes.CHAR, DataTypes.STRING]:
+                            size = stack.data[stack.last_index].size + 1
+                            stack.data[stack.last_index].data += right_oper_copy
+                            type = DataTypes.STRING
+
                 else:
                     right_oper_copy = right_oper_value.data
-                stack.add_data(StackData(right_oper_copy,
-                                    reg_val + __INT__(instruction.Op1.addr).value,
-                                    size,
-                                    int(stack.base +  __INT__(instruction.Op1.addr).value),
-                                    type))
+                stack.handle_stack_operation(instruction,
+                                             StackData(right_oper_copy,
+                                                       reg_val + __INT__(instruction.Op1.addr).value,
+                                                       size,
+                                                       int(stack.base +  __INT__(instruction.Op1.addr).value),
+                                                       type))
 
 
         else:

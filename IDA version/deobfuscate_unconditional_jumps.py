@@ -16,6 +16,7 @@ try:
         __sBITS__    : str = '32'
         __iBITS__    : int = 32
         MSB_MASK     : int = 0x80000000
+        __INT__      : object = ctypes.c_int32
         __UINT__     : object = ctypes.c_uint32
         MAX_REG_VALUE: int = 0xFFFFFFFF
 
@@ -23,6 +24,7 @@ try:
         __sBITS__     : str = '64'
         __iBITS__     : int = 64
         MSB_MASK      : int = 0x8000000000000000
+        __INT__       : object = ctypes.c_int64
         __UINT__      : object = ctypes.c_uint64
         MAX_REG_VALUE : int = 0xFFFFFFFFFFFFFFFF
         REG_BYTES_SIZE: int = 8
@@ -31,8 +33,10 @@ try:
         __sBITS__    : str = '16'
         __iBITS__    : int = 16
         MSB_MASK     : int = 0x8000
+        __INT__      : object = ctypes.c_uint16
         __UINT__     : object = ctypes.c_uint16
         MAX_REG_VALUE: int = 0xFFFF
+
     else: raise RuntimeError
 except RuntimeError:
     print("couldn't identify the bit-ness of the file")
@@ -74,8 +78,9 @@ class StackData(Data):
         super().__init__(data, size, address, dt_type)
 
         self.base_offset = base_offset
-
-    def __repr__(self): return f'Offset: {self.base_offset:x} | Data: {self.data:x} | Size: {self.size:x} bytes\n'
+        if isinstance(self.data, int):
+            self.data = hex(self.data)
+    def __repr__(self): return f'Offset: {self.base_offset:x} | Data: {self.data} | Size: {self.size:x} bytes\n'
 
 class StackFrame:
     """Stack Frame:
@@ -83,12 +88,14 @@ class StackFrame:
     """
     def __init__(self,
                  start_address: ea_t,
+                 base_addr    : ea_t,
+                 top_addr     : ea_t,
                  calling_frame: object | None = None,
                  depth        : int            = 0)->None:
 
         self.start_addr    : ea_t              = start_address
-        self.base          : ea_t              = 0x100000
-        self.top           : ea_t              = 0x100000
+        self.base          : ea_t              = base_addr
+        self.top           : ea_t              = top_addr
         self.data          : dict              = {}
         self.prev_frame    : StackFrame | None = calling_frame
         self.next_frame    : StackFrame | None = None
@@ -119,8 +126,8 @@ class StackFrame:
     def add_data(self, stack_data: StackData)->None:
         if stack_data.base_offset > self.top:
             print(f'[!] Appended outside the frame!')
-
-        self.data[int(stack_data.base_offset)] = stack_data
+        offset: int = int(stack_data.base_offset)
+        self.data[offset] = stack_data
         self.top_stored_var = self.top
 
     def handle_stack_operation(self, instruction: ida_ua.insn_t, oper_value: int)->int:
@@ -138,9 +145,9 @@ class StackFrame:
                         raise NotImplementedError
 
                     if reg == procregs.ebp.reg:
-                        self.data[int(self.base + instruction.Op1.addr)] = StackData(oper_value, self.start_addr + self.top, 4, self.base + instruction.Op1.addr, DataTypes.DWORD)
+                        self.data[self.base + __INT__(instruction.Op1.addr).value] = StackData(oper_value, self.start_addr + self.top, 4, self.base + instruction.Op1.addr, DataTypes.DWORD)
                     elif reg == procregs.esp.reg:
-                        self.data[int(self.top + instruction.Op1.addr)] = StackData(oper_value, self.start_addr + self.top, 4, self.top + instruction.Op1.addr, DataTypes.DWORD)
+                        self.data[self.top + __INT__( instruction.Op1.addr).value] = StackData(oper_value, self.start_addr + self.top, 4, self.top + instruction.Op1.addr, DataTypes.DWORD)
                     else:
                         raise NotImplementedError
 
@@ -181,8 +188,8 @@ class StackFrame:
         except NotImplementedError:
             exit(-1)
 
-    def create_called_frame(self, start_address: ea_t):
-        self.next_frame: StackFrame = StackFrame(start_address, self, self.depth + 1)
+    def create_called_frame(self, start_address: ea_t, base_pointer, stack_pointer):
+        self.next_frame: StackFrame = StackFrame(start_address,base_pointer, stack_pointer,  self, self.depth + 1)
 
         return self.next_frame
 
@@ -322,7 +329,7 @@ class CpuContext:
 \tReg_BP: {hex(self.reg_bp)}
 \tReg_SP: {hex(self.reg_sp)}
 \tReg_IP: {hex(self.reg_ip)}
-	
+    
 - {self.flags}\n"""
 
     def update_regs_n_flags(self, instruction: ida_ua.insn_t)->bool:
@@ -640,7 +647,7 @@ def main(effective_address: ea_t       = idc.here(),
          context          : CpuContext        = CpuContext(),
          jump_count       : int               = 0,
          helper           : InstructionHelper = InstructionHelper())->int:
-    stack      : StackFrame    = StackFrame(effective_address)
+    stack      : StackFrame    = StackFrame(effective_address, context.reg_bp, context.reg_sp)
     eval_start : ea_t          = effective_address
     instruction: ida_ua.insn_t
     while True:
@@ -661,6 +668,7 @@ def main(effective_address: ea_t       = idc.here(),
         helper.set_instruction(instruction)
         if helper.is_stack_op():
             print("[i] Stack Op")
+
             if instruction.Op1.type == ida_ua.o_imm:
                 right_oper_value: int = instruction.Op1.value
 
@@ -669,15 +677,12 @@ def main(effective_address: ea_t       = idc.here(),
 
             elif instruction.Op1.type == ida_ua.o_displ:
 
-
                 if instruction.Op1.phrase == procregs.ebp.reg:
                     right_oper_value = stack.data[instruction.Op1.addr].data
 
-                elif instruction.Op1.phrase == procregs.esp.reg:
-                    right_oper_value = stack.data[stack.top + instruction.Op1.addr].data
+            elif instruction.Op1.phrase == procregs.esp.reg:
+                right_oper_value = stack.data[stack.top + instruction.Op1.addr].data
 
-                else:
-                    break
             else:
                 idc.jumpto(effective_address)
                 break
@@ -730,7 +735,7 @@ def main(effective_address: ea_t       = idc.here(),
         elif ida_allins.NN_call <= instruction.itype <= ida_allins.NN_callni:
             print(f'[i] Called @{instruction.Op1.addr:x} from {instruction.ea:x}')
             if not helper.are_skipped_instructions_junk():
-                stack = stack.create_called_frame(instruction.Op1.addr)
+                stack = stack.create_called_frame(instruction.Op1.addr, context.reg_bp, context.reg_sp)
 
             if not helper.handle_forward_movement():
                 print('[✕] Handle Forward Movement Failed! breaking the loop')
@@ -740,6 +745,7 @@ def main(effective_address: ea_t       = idc.here(),
             eval_start        = effective_address
             jump_count       += 1
             continue
+
         elif helper.is_arithmetic():
             if instruction.Op1.type == ida_ua.o_reg:
                 if instruction.Op1.reg in [procregs.ebp.reg, procregs.esp.reg]:
@@ -772,7 +778,7 @@ def main(effective_address: ea_t       = idc.here(),
                         break
                 case default:
                     break
-            right_oper_value: int = 0
+
             if instruction.Op1.type == instruction.Op1.phrase:
                 if instruction.Op1.reg == procregs.esp.reg:
                     right_oper_value = stack.data[stack.top]
@@ -785,17 +791,30 @@ def main(effective_address: ea_t       = idc.here(),
 
             elif instruction.Op1.type == ida_ua.o_displ:
                 if instruction.Op1.reg == procregs.esp.reg:
-                    stack.data[context.reg_sp + instruction.Op1.addr].data = right_oper_value
+                    reg_val = context.reg_sp
+
+
+
 
                 elif instruction.Op1.reg == procregs.ebp.reg:
-                    stack.data[context.reg_bp + instruction.Op1.addr].data = right_oper_value
+                    reg_val = context.reg_bp
+
 
                 else:
                     break
-
-            else:
-                break
-
+                if not isinstance(right_oper_value, StackData):
+                        right_oper_copy = right_oper_value
+                        if 0x30 <= right_oper_copy <= 0x100:
+                            right_oper_copy = chr(right_oper_value)
+                            size = 1
+                            type =DataTypes.BYTE
+                else:
+                    right_oper_copy = right_oper_value.data
+                stack.add_data(StackData(right_oper_copy,
+                                    reg_val + __INT__(instruction.Op1.addr).value,
+                                    size,
+                                    int(stack.base +  __INT__(instruction.Op1.addr).value),
+                                    type))
 
 
         else:

@@ -1,7 +1,6 @@
 from my_globals import MSB_MASK
 class FlagsContext:
-    """
-    Flags Context:\n
+    """Flags Context:\n
     This class holds context to all (currently 32bit) flags used by conditional execution opcodes
     """
     def __init__(self)->None:
@@ -15,14 +14,14 @@ class FlagsContext:
         self.trap           : bool = False
         self.interrupt      : bool = False
 
-    def __repr__(self)->str: return f"""
-Flag States:
+    def __repr__(self)->str: return f"""Flag States:
 \tZF = {int(self.zero)}\tPF = {int(self.parity)}\tAF = {int(self.auxiliary_carry)}
 \tOF = {int(self.overflow)}\tSF = {int(self.sign)}\tDF = {int(self.direction)}
 \tCF = {int(self.carry)}\tTF = {int(self.trap)}\tIF = {int(self.interrupt)}"""
 
     @staticmethod
-    def _check_sign(value)->bool: return value & MSB_MASK != 0
+    def _check_sign(value)->bool:
+        return value & MSB_MASK != 0
 
     def set_sign(self, result: int)->None:
         self.sign = result & MSB_MASK != 0

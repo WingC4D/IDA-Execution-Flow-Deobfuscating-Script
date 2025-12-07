@@ -1,6 +1,7 @@
 from flags import FlagsContext
 from my_globals import __UINT__, __sBITS__, __32bit__
-import ida_allins, idautils, ida_ua
+import ida_allins, ida_ua
+from idautils import procregs
 class CpuContext:
     """CPU Context Class:\n
     - This class holds context to all registers & flags (currently of a 32bit processor)\n
@@ -9,7 +10,7 @@ class CpuContext:
     1. registers:\n
     - type: dict\n
     - data: ctypes unsigned int in the cpu's bit size\n
-    - indexing: idautils.procregs.REG.reg\n
+    - indexing: procregs.REG.reg\n
     2. flags:\n
     - type: FlagsContext
     - details: see Flags context
@@ -19,15 +20,15 @@ class CpuContext:
         try:
             if __32bit__:
                 self.registers: dict = {
-                    idautils.procregs.eax.reg: __UINT__(0),
-                    idautils.procregs.ebx.reg: __UINT__(0),
-                    idautils.procregs.ecx.reg: __UINT__(0),
-                    idautils.procregs.edx.reg: __UINT__(0),
-                    idautils.procregs.edi.reg: __UINT__(0),
-                    idautils.procregs.esi.reg: __UINT__(0),
-                    idautils.procregs.ebp.reg: __UINT__(0),
-                    idautils.procregs.esp.reg: __UINT__(0),
-                    idautils.procregs.eip.reg: __UINT__(0)
+                    procregs.eax.reg: __UINT__(0),
+                    procregs.ebx.reg: __UINT__(0),
+                    procregs.ecx.reg: __UINT__(0),
+                    procregs.edx.reg: __UINT__(0),
+                    procregs.edi.reg: __UINT__(0),
+                    procregs.esi.reg: __UINT__(0),
+                    procregs.ebp.reg: __UINT__(0x100000),
+                    procregs.esp.reg: __UINT__(0x100000),
+                    procregs.eip.reg: __UINT__(0)
                 }
             else:
                 raise NotImplementedError
@@ -37,55 +38,57 @@ class CpuContext:
         self.flags: FlagsContext = FlagsContext()
 
     @property
-    def reg_ax(self): return self.registers[idautils.procregs.eax.reg].value
+    def reg_ax(self): return self.registers[procregs.eax.reg].value
 
     @property
-    def reg_bx(self): return self.registers[idautils.procregs.ebx.reg].value
+    def reg_bx(self): return self.registers[procregs.ebx.reg].value
 
     @property
-    def reg_cx(self): return self.registers[idautils.procregs.ecx.reg].value
+    def reg_cx(self): return self.registers[procregs.ecx.reg].value
 
     @property
-    def reg_dx(self): return self.registers[idautils.procregs.edx.reg].value
+    def reg_dx(self): return self.registers[procregs.edx.reg].value
 
     @property
-    def reg_di(self): return self.registers[idautils.procregs.edi.reg].value
+    def reg_di(self): return self.registers[procregs.edi.reg].value
 
     @property
-    def reg_si(self): return self.registers[idautils.procregs.esi.reg].value
+    def reg_si(self): return self.registers[procregs.esi.reg].value
 
     @property
-    def reg_bp(self): return self.registers[idautils.procregs.ebp.reg].value
+    def reg_bp(self): return self.registers[procregs.ebp.reg].value
 
     @property
-    def reg_sp(self)->int: return self.registers[idautils.procregs.esp.reg].value
+    def reg_sp(self)->int: return self.registers[procregs.esp.reg].value
 
     @property
-    def reg_ip(self): return self.registers[idautils.procregs.eip.reg].value
+    def reg_ip(self): return self.registers[procregs.eip.reg].value
 
-    def __repr__(self)->str: return f"""
-    CPU Context:
-    - Architecture:
-    \t{__sBITS__}bit Intel || AMD\n\n- Integer Registers:\n\tReg_AX: {hex(self.reg_ax)}
-	\tReg_BX: {hex(self.reg_bx)}
-	\tReg_CX: {hex(self.reg_cx)}
-	\tReg_DX: {hex(self.reg_dx)}
-	\tReg_DI: {hex(self.reg_di)}
-	\tReg_SI: {hex(self.reg_si)}
-	\tReg_BP: {hex(self.reg_bp)}
-	\tReg_SP: {hex(self.reg_sp)}
-	\tReg_IP: {hex(self.reg_ip)}
-	
-    -{self.flags}\n"""
+    def __repr__(self)->str: return f"""CPU Context:
+- Architecture: {__sBITS__}bit Intel || AMD\n\n- Integer Registers:\n\tReg_AX: {hex(self.reg_ax)}
+\tReg_BX: {hex(self.reg_bx)}
+\tReg_CX: {hex(self.reg_cx)}
+\tReg_DX: {hex(self.reg_dx)}
+\tReg_DI: {hex(self.reg_di)}
+\tReg_SI: {hex(self.reg_si)}
+\tReg_BP: {hex(self.reg_bp)}
+\tReg_SP: {hex(self.reg_sp)}
+\tReg_IP: {hex(self.reg_ip)}
+    
+- {self.flags}\n"""
 
     def update_regs_n_flags(self, instruction: ida_ua.insn_t)->bool:
         if instruction.Op2.type == ida_ua.o_reg:
             right_oper_value: int = self.registers[instruction.Op2.reg].value
         else:
             right_oper_value = instruction.Op2.value
+
         org_reg_value: int = self.registers[instruction.Op1.reg].value
+
         if instruction.itype == ida_allins.NN_mov:
-            self.registers[instruction.Op1.reg].value = right_oper_value
+            if instruction.Op1.type == ida_ua.o_reg:
+                self.registers[instruction.Op1.reg].value = right_oper_value
+
             return True
 
         elif instruction in [ida_allins.NN_inc, ida_allins.NN_dec]:
@@ -165,4 +168,24 @@ class CpuContext:
             case ida_allins.NN_jz   | ida_allins.NN_je  | ida_allins.NN_jnge: return self.flags.zero
             case ida_allins.NN_jb   | ida_allins.NN_jc  | ida_allins.NN_jnae: return self.flags.carry
             case ida_allins.NN_jnb  | ida_allins.NN_jnc | ida_allins.NN_jae : return not self.flags.carry
-            case default: return False
+        return False
+
+    def eval_cond_mov(self, instruction_type: int)->bool:
+        match instruction_type:
+            case ida_allins.NN_cmovbe: return self.flags.carry or self.flags.zero
+            case ida_allins.NN_cmovg : return self.flags.sign == self.flags.overflow and not self.flags.zero
+            case ida_allins.NN_cmovge: return self.flags.sign == self.flags.overflow
+            case ida_allins.NN_cmovl : return self.flags.sign != self.flags.overflow
+            case ida_allins.NN_cmovle: return self.flags.sign != self.flags.overflow or self.flags.zero
+            case ida_allins.NN_cmovb : return self.flags.carry
+            case ida_allins.NN_cmovo : return self.flags.overflow
+            case ida_allins.NN_cmovp : return self.flags.parity
+            case ida_allins.NN_cmovs : return self.flags.sign
+            case ida_allins.NN_cmovz : return self.flags.zero
+            case ida_allins.NN_cmovnz: return not self.flags.zero
+            case ida_allins.NN_cmovns: return not self.flags.sign
+            case ida_allins.NN_cmovnp: return not self.flags.parity
+            case ida_allins.NN_cmovno: return not self.flags.overflow
+            case ida_allins.NN_cmovnb: return not self.flags.carry
+            case ida_allins.NN_cmova : return not self.flags.carry and not self.flags.zero
+        return False

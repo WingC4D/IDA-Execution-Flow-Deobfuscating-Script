@@ -2,7 +2,7 @@ from cpu import CpuContext
 from memory import StackFrame
 from my_globals import __JUMP_LIMIT__, __INT__
 import idc, ida_auto, ida_ua, ida_allins
-from instruction_helper import InstructionHelper
+from helpers import InstructionHelper
 from idautils import DecodeInstruction, procregs
 from idaapi import ea_t, msg_clear
 

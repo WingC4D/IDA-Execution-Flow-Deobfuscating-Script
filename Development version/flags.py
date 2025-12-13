@@ -1,4 +1,5 @@
 from my_globals import MSB_MASK
+
 class FlagsContext:
     """Flags Context:\n
     This class holds context to all (currently 32bit) flags used by conditional execution opcodes
@@ -38,6 +39,9 @@ class FlagsContext:
         else:
             self.overflow = False
 
+    def set_overflow_imul(self, arg_value_a: int, value_b: int)->None:
+        self.overflow = arg_value_a * value_b  > MSB_MASK - 1 or arg_value_a * value_b < 1 - MSB_MASK
+
     def set_overflow_sub(self, result: int, org_value_a: int, value_b: int)->None:
         if self._check_sign(org_value_a) != self._check_sign(value_b):
             self.overflow = self._check_sign(value_b) == self._check_sign(result)
@@ -49,7 +53,6 @@ class FlagsContext:
         bits_set_to_1         : int = 0
         curr_bit              : int = 1
         while curr_bit <= 0x80:
-
             if curr_bit & least_significant_byte:
                 bits_set_to_1 += 1
 
@@ -57,7 +60,11 @@ class FlagsContext:
         self.parity = bits_set_to_1 % 2 == 0
 
     def reset(self)->None:
-        self.carry, self.overflow, self.sign, self.zero, self.parity = False, False, False, False, False
+        self.carry    = False
+        self.overflow = False
+        self.sign     = False
+        self.zero     = False
+        self.parity   = False
 
     def update(self, result: int)->None:
         self.zero  = result == 0

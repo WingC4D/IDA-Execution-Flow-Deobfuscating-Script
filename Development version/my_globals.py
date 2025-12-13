@@ -1,4 +1,5 @@
-import ctypes, enum
+from ctypes import c_int16 ,c_int32, c_int64, c_uint16, c_uint32, c_uint64
+from enum import Enum
 from idaapi import inf_is_16bit, inf_is_32bit_exactly,inf_is_64bit
 # It's a skill issue lol.
 __16bit__      : bool      = inf_is_16bit()
@@ -12,16 +13,16 @@ try:
         __sBITS__    : str = '32'
         __iBITS__    : int = 32
         MSB_MASK     : int = 0x80000000
-        __INT__      : object = ctypes.c_int32
-        __UINT__     : object = ctypes.c_uint32
+        __INT__      : object = c_int32
+        __UINT__     : object = c_uint32
         MAX_REG_VALUE: int = 0xFFFFFFFF
 
     elif __64bit__:
         __sBITS__     : str = '64'
         __iBITS__     : int = 64
         MSB_MASK      : int = 0x8000000000000000
-        __INT__       : object = ctypes.c_int64
-        __UINT__      : object = ctypes.c_uint64
+        __INT__       : object = c_int64
+        __UINT__      : object = c_uint64
         MAX_REG_VALUE : int = 0xFFFFFFFFFFFFFFFF
         REG_BYTES_SIZE: int = 8
 
@@ -29,22 +30,23 @@ try:
         __sBITS__    : str = '16'
         __iBITS__    : int = 16
         MSB_MASK     : int = 0x8000
-        __INT__      : object = ctypes.c_uint16
-        __UINT__     : object = ctypes.c_uint16
+        __INT__      : object = c_int16
+        __UINT__     : object = c_uint16
         MAX_REG_VALUE: int = 0xFFFF
 
     else: raise RuntimeError
 except RuntimeError:
     print("couldn't identify the bit-ness of the file")
     exit(-1)
+
 __HEAP_REF__ = MAX_REG_VALUE + 1
 
-class SkippedDataState(enum.Enum):
+class SkippedDataState(Enum):
     FINISHED_IS_NOT_JUNK = 0
     FINISHED_IS_JUNK     = 1
     NOT_FINISHED_IS_CODE = 2
 
-class DataTypes(enum.Enum):
+class DataTypes(Enum):
     BYTE    = 0x1
     WORD    = 0x2
     DWORD   = 0x4

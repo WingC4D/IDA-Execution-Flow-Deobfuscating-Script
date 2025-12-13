@@ -1,12 +1,12 @@
 from cpu import CpuContext
 from memory import StackFrame
-from my_globals import __JUMP_LIMIT__,  __ARITHMETIC__, __COMPARATIVE__, __STACK_OPS__, __BITWISE_OPS__
-import idc, ida_auto, ida_bytes, ida_ua, ida_allins, idautils,idaapi
+from my_globals import __JUMP_LIMIT__, __INT__
+import idc, ida_auto, ida_ua, ida_allins
 from instruction_helper import InstructionHelper
 from idautils import DecodeInstruction, procregs
 from idaapi import ea_t, msg_clear
 
-def main(effective_address: ea_t       = idc.here(),
+def main(effective_address: ea_t              = idc.here(),
          context          : CpuContext        = CpuContext(),
          jump_count       : int               = 0,
          helper           : InstructionHelper = InstructionHelper())->int:
@@ -15,7 +15,7 @@ def main(effective_address: ea_t       = idc.here(),
     instruction: ida_ua.insn_t
     while True:
         print(f'{effective_address:x}')
-        context.registers[procregs.eip.reg].value = effective_address
+        context.gen_registers[procregs.eip.reg].value = effective_address
         instruction = DecodeInstruction(effective_address)
         if jump_count >= __JUMP_LIMIT__:
             break
@@ -32,16 +32,24 @@ def main(effective_address: ea_t       = idc.here(),
 
         if helper.is_stack_op():
             oper_value = helper.get_oper_value(0, context, stack)
-            stack.handle_stack_operation(instruction, oper_value)
-            print(stack)
+            match helper.inst.itype:
+                case ida_allins.NN_push:
+                    context.reg_sp -= 4
+
+                case ida_allins.NN_pop:
+                    context.reg_sp += 4
+            res = stack.handle_stack_operation(instruction, oper_value)
+            if instruction.itype == ida_allins.NN_pop:
+                context.gen_registers[instruction.Op1.reg].value = res
+            print(context)
 
         elif helper.is_comparative():
-            if  not context.update_regs_n_flags(instruction):
+            if not context.update_regs_n_flags(instruction, helper.get_oper_value(-1, context, stack)):
                 idc.jumpto(effective_address)
                 break
 
         elif helper.is_bitwise_op():
-            if  not context.update_regs_n_flags(instruction):
+            if not context.update_regs_n_flags(instruction, helper.get_oper_value(-1, context, stack)):
                 idc.jumpto(effective_address)
                 break
 
@@ -66,10 +74,12 @@ def main(effective_address: ea_t       = idc.here(),
         elif helper.is_cond_mov():
             if context.eval_cond_mov(instruction.itype):
                 instruction.itype = ida_allins.NN_mov
-                context.update_regs_n_flags(instruction)
+                context.update_regs_n_flags(instruction, helper.get_oper_value(-1, context, stack))
 
         elif helper.is_non_cond_jump():
             exec_flow_shift_msg(instruction)
+            if not helper.handle_forward_movement():
+                exit(-4)
             effective_address = instruction.Op1.addr
             eval_start        = effective_address
             jump_count       += 1
@@ -91,25 +101,51 @@ def main(effective_address: ea_t       = idc.here(),
             jump_count       += 1
             continue
 
-        elif helper.is_arithmetic():
+        elif helper.is_arithmetic_add():
+            value = helper.get_oper_value(1, context, stack)
             if helper.validate_stack_regs_op():
-                if instruction.Op2.type == ida_ua.o_reg :
-                    stack.handle_stack_operation(instruction, context.registers[instruction.Op2.reg].value)
+                reg: int = -1
+                match instruction.Op1.type:
+                    case ida_ua.o_reg:
+                        reg = instruction.Op1.reg
 
-                elif instruction.Op2.type == ida_ua.o_imm:
-                    stack.handle_stack_operation(instruction, instruction.Op2.value)
-                    print(stack)
+                    case ida_ua.o_displ | ida_ua.o_phrase:
+                        reg  = instruction.Op1.phrase
 
-            if not context.update_regs_n_flags(instruction):
+                    case default:
+                        idc.jumpto(effective_address)
+                        break
+
+                new_index = context.gen_registers[reg].value + __INT__(instruction.Op1.addr).value
+
+                match instruction.Op2.type:
+                    case ida_ua.o_reg:
+                        stack.handle_stack_operation(instruction, value, context.gen_registers[reg].value)
+
+                    case ida_ua.o_imm:
+                        stack.handle_stack_operation(instruction, value, new_index)
+
+                    case ida_ua.o_phrase:
+                        stack.handle_stack_operation(instruction, stack.data[context.gen_registers[instruction.Op2.phrase].value], new_index)
+
+                    case ida_ua.o_displ:
+                        stack.handle_stack_operation(instruction, stack.data[context.gen_registers[instruction.Op2.phrase].value + __INT__(instruction.Op2.addr).value], new_index)
+
+            if not context.update_regs_n_flags(instruction, value):
                 idc.jumpto(effective_address)
                 break
 
+        elif helper.is_arithmetic_mul():
+            oper_value = helper.get_oper_value(-1, context, stack)
+            context.update_regs_n_flags(instruction, oper_value)
+
         elif helper.is_non_cond_mov():
+            oper_value = helper.get_oper_value(-1,context, stack)
             if not helper.validate_stack_regs_op():
                 if instruction.Op1.type == ida_ua.o_reg:
-                    context.update_regs_n_flags(instruction)
+                    context.update_regs_n_flags(instruction, oper_value)
+
             else:
-                helper.validate_operands()
                 stack.handle_stack_operation(instruction, helper.get_oper_value(1, context, stack), helper.retrieve_stack_addr(context))
 
         else:

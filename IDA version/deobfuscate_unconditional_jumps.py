@@ -1,10 +1,10 @@
-from idaapi   import ea_t,prev_head, msg_clear, inf_is_64bit, inf_is_32bit_exactly, inf_is_16bit
+from idaapi   import ea_t, prev_head, msg_clear, inf_is_64bit, inf_is_32bit_exactly, inf_is_16bit
 from ida_xref import get_first_cref_to, get_next_cref_to
 from idautils import DecodeInstruction, procregs
 from enum     import Enum
 from ctypes   import c_int16, c_int32, c_int64, c_uint16, c_uint32, c_uint64
-
-import idc, ida_allins, ida_bytes, ida_auto, ida_ua
+from idc      import here, jumpto, BADADDR
+import ida_allins, ida_bytes, ida_auto, ida_ua
 # It's a skill issue lol.
 __16bit__      : bool      = inf_is_16bit()
 __32bit__      : bool      = inf_is_32bit_exactly()
@@ -14,36 +14,38 @@ __OPER_COUNT__ : int       = 0x8
 
 try:
     if __32bit__:
-        __sBITS__    : str = '32'
-        __iBITS__    : int = 32
-        MSB_MASK     : int = 0x80000000
-        __INT__      : object = c_int32
-        __UINT__     : object = c_uint32
-        MAX_REG_VALUE: int = 0xFFFFFFFF
+        __sBITS__     : str    = '32'
+        __iBITS__     : int    = 0x20
+        MSB_MASK      : int    = 0x80000000
+        MAX_REG_VALUE : int    = 0xFFFFFFFF
+        REG_BYTES_SIZE: int    = 4
+        __INT__       : object = c_int32
+        __UINT__      : object = c_uint32
 
     elif __64bit__:
-        __sBITS__     : str = '64'
-        __iBITS__     : int = 64
-        MSB_MASK      : int = 0x8000000000000000
+        __sBITS__     : str    = '64'
+        __iBITS__     : int    = 0x40
+        MSB_MASK      : int    = 0x8000000000000000
+        MAX_REG_VALUE : int    = 0xFFFFFFFFFFFFFFFF
+        REG_BYTES_SIZE: int    = 8
         __INT__       : object = c_int64
         __UINT__      : object = c_uint64
-        MAX_REG_VALUE : int = 0xFFFFFFFFFFFFFFFF
-        REG_BYTES_SIZE: int = 8
+
 
     elif __16bit__:
-        __sBITS__    : str = '16'
-        __iBITS__    : int = 16
-        MSB_MASK     : int = 0x8000
-        __INT__      : object = c_int16
-        __UINT__     : object = c_uint16
-        MAX_REG_VALUE: int = 0xFFFF
+        __sBITS__     : str    = '16'
+        __iBITS__     : int    = 0x10
+        MSB_MASK      : int    = 0x8000
+        MAX_REG_VALUE : int    = 0xFFFF
+        REG_BYTES_SIZE: int    = 2
+        __INT__       : object = c_int16
+        __UINT__      : object = c_uint16
 
     else: raise RuntimeError
-except RuntimeError:
-    print("couldn't identify the bit-ness of the file")
-    exit(-1)
 
-__HEAP_REF__ = MAX_REG_VALUE + 1
+except RuntimeError: exit("couldn't identify the bit-ness of the file")
+
+__HEAP_REF__: int = MAX_REG_VALUE + 1
 
 class SkippedDataState(Enum):
     FINISHED_IS_NOT_JUNK = 0
@@ -84,9 +86,8 @@ class StackData(Data):
 
         self.base_offset = base_offset
 
-    def __repr__(self, max_length: int)->str:
+    def __repr__(self, max_length: int = 10)->str:
         repr_str: str = ''
-        if max_length < 8: max_length = 8
         if isinstance(self.data, int):
             format_str: str =f'#{str(max_length)}x'
             repr_str = format(self.data, format_str)
@@ -94,13 +95,14 @@ class StackData(Data):
             repr_str = self.data
             length: int = len(repr_str)
             if length < max_length:
-                repr_str = f"{' ' * (max_length - length) + repr_str}"
-        return f'Offset: {self.base_offset:#6x} | Address: {self.addr:#8x}| Data: {repr_str} | Size: {format(self.size, '#6x')} bytes\n'
+                repr_str = f"{' ' * (max_length - length)}{repr_str}"
+        return f'Address: {self.addr:#8x} | Offset: {format(self.base_offset, '#6x')} | Data: {repr_str} | Size: {format(self.size, '#6x')} bytes\n'
 
     def is_char(self)->bool:
         return self.type == DataTypes.CHAR
 
-    def is_string(self)->bool: return self.type == DataTypes.STRING
+    def is_string(self)->bool:
+        return self.type == DataTypes.STRING
 
 class StackFrame:
     """Stack Frame:
@@ -125,9 +127,7 @@ class StackFrame:
         self.longest_str_len: int                  = 8
 
 
-    @property
-    def dt_last_referenced(self)->StackData:
-        return self.data[self.last_index]
+
 
     def __repr__(self)->str:
         data_addresses: list[int]       = [data_addr for  data_addr, data_obj in self.data.items()]
@@ -139,141 +139,36 @@ class StackFrame:
 {'\t' * self.depth}Current Top Address : {format(self.top, '#10x')}
 {'\t' * self.depth}Stack Depth: {self.depth}
 {'\t' * self.depth}Stack Data:{"{"}
-{str('\t' + '\t' * self.depth)}{(str('\t' + '\t' * self.depth)).join([self.data[int(addr)].__repr__(max_length=self.longest_str_len) for addr in data_addresses if addr >= self.top])}
+{str('\t' + '\t' * self.depth)}{(str('\t' + '\t' * self.depth)).join([self.data[int(addr)].__repr__(max_length=self.longest_str_len) for addr in data_addresses if self.base >= addr >= self.top])}
 {'\t' * self.depth + '}'}"""
 
 
+    @property
+    def addresses(self)->list[int]:
+        if not self.data: return []
+        return [address for address, obj in self.data.items()]
+
+    @property
+    def top_used_addr(self)->int:
+        if not self.addresses: return -1
+        self.addresses.sort()
+        for address in self.addresses:
+            if self.base>= address >= self.top: return address
+
+        return -1
+
     def add_data(self, stack_data: StackData)->None:
         if stack_data.addr < self.top:
-            print(f'[!] Appended outside the frame!')
+            print(f'[!] Appended outside the frame! addr: {stack_data.addr:#x}')
 
         self.data[stack_data.addr] = stack_data
 
-    def handle_stack_operation(self, instruction: ida_ua.insn_t, oper_value: int | StackData, new_index: int | None = None)->int:
-        """This method handles the "StackFrame" class' data members when a PUSH or a POP operation is identified.\n
-        This method returns the current stack offset to help evaluate the SP correctness."""
-        try:
-            match instruction.itype:
-                case ida_allins.NN_mov:
-                    size: int = 4
-                    dt_type = DataTypes.DWORD
-                    match instruction.Op2.dtype:
-                        case ida_ua.dt_byte:
-                            size = 1
-                        case ida_ua.dt_word:
-                            size = 2
-                        case ida_ua.dt_dword:
-                            size = 4
-                        case default:
-                            exit(-5)
-                    if isinstance(oper_value, int):
-                        if self.is_in_ascii(oper_value):
-                            if self.dt_last_referenced.is_string() or self.dt_last_referenced.is_char():
-                                if new_index == self.dt_last_referenced.addr + self.dt_last_referenced.size:
-                                    self.strcat(chr(oper_value), size)
-                                    self.dt_last_referenced.type = DataTypes.STRING
-                                    print(self)
-                                    return oper_value
 
-                            oper_value = chr(oper_value)
-                            dt_type    = DataTypes.CHAR
-                            self.last_index = new_index
-                        elif oper_value == 0:
-                            if size & 3 :
-                                if self.dt_last_referenced.is_string():
-                                    self.dt_last_referenced.size += size
-                                    print(self)
-                                    return oper_value
-
-                        self.last_index = new_index
-
-
-                    elif isinstance(oper_value, StackData):
-                        oper_value  = oper_value.data
-                        self.last_index = new_index
-
-                    start: int  = 0
-                    match instruction.Op1.reg:
-                        case procregs.esp.reg:
-                            start = self.top
-
-                        case procregs.ebp.reg:
-                            start = self.base
-
-                    self.add_data(StackData(oper_value, self.last_index, size, self.base - (start +  __INT__(instruction.Op1.addr).value), dt_type))
-
-                case ida_allins.NN_push:
-                    self.top -= 0x4
-                    self.last_index = self.top
-                    self.top_stored_var = self.top
-                    self.add_data(StackData(oper_value, self.top, 4, self.base - self.top, DataTypes.DWORD))
-
-                case ida_allins.NN_pop:
-                    popped_stack_data: StackData = self.data.pop(self.top_stored_var)
-                    self.top += 4
-                    self.last_index     = self.top
-                    self.top_stored_var = self.top
-                    popped_data: int
-                    if isinstance(popped_stack_data.data, str):
-                        popped_data =  popped_stack_data.addr
-
-                    elif isinstance(popped_stack_data.data, int):
-                        popped_data = popped_stack_data.data
-
-                    else:
-                        raise NotImplementedError
-
-                    return popped_data
-
-                case ida_allins.NN_popa:
-                    self.last_index = self.top
-                    self.top += 0x14
-                    self.top_stored_var = self.top
-
-                case ida_allins.NN_pusha:
-                    self.last_index = self.top
-                    self.top -= 0x14
-                    self.top_stored_var = self.top
-
-                case ida_allins.NN_add:
-                    if instruction.Op1.reg == procregs.esp.reg:
-                        self.top += oper_value
-
-                    elif instruction.Op1.reg == procregs.ebp.reg:
-                        self.base += oper_value
-
-                case ida_allins.NN_sub:
-                    print(f'[!] Reached a Stack Substruction Operation, Substructing {oper_value:#x} @{instruction.ea:x}')
-                    if instruction.Op1.reg == procregs.esp.reg:
-                        self.top -= oper_value
-
-                    elif instruction.Op1.reg == procregs.ebp.reg:
-                        self.base += oper_value
-
-                case default:
-                    raise NotImplementedError
-            print(self)
-            return self.last_index
-
-        except NotImplementedError:
-            exit(-1)
 
     def create_called_frame(self, start_address: ea_t, base_pointer, stack_pointer):
         self.next_frame: StackFrame = StackFrame(start_address,base_pointer, stack_pointer,  self, self.depth + 1)
 
         return self.next_frame
-
-    @staticmethod
-    def is_in_ascii(candidate_value: int)->bool:
-        return 0x20 <= candidate_value <= 0x80
-
-    def strcat(self, string: str, size: int)->None:
-        self.dt_last_referenced.data += string
-        if self.dt_last_referenced.is_char():
-            self.dt_last_referenced.type = DataTypes.STRING
-        self.dt_last_referenced.size += size
-        if len(self.dt_last_referenced.data) > 10:
-            self.longest_str_len = len(self.dt_last_referenced.data)
 
 class FlagsContext:
     """Flags Context:\n
@@ -435,84 +330,6 @@ class CpuContext:
     
 - {self.flags}\n"""
 
-    def update_regs_n_flags(self, instruction: ida_ua.insn_t, oper_value: int | str | None = 1)->bool:
-        org_reg_value: int = self.gen_registers[instruction.Op1.reg].value
-
-        if instruction.itype == ida_allins.NN_mov:
-            if instruction.Op1.type == ida_ua.o_reg:
-                self.gen_registers[instruction.Op1.reg].value = oper_value
-            print(self)
-            return True
-
-        elif instruction in [ida_allins.NN_inc, ida_allins.NN_dec]:
-            org_carry = self.flags.carry
-            self.flags.reset()
-            self.flags.carry = org_carry
-
-        else:
-            self.flags.reset()
-        result: int = -1
-        match instruction.itype:
-            case ida_allins.NN_add:
-                self.gen_registers[instruction.Op1.reg].value += oper_value
-                self.flags.set_carry_add(self.gen_registers[instruction.Op1.reg].value, org_reg_value)
-                self.flags.set_overflow_add(self.gen_registers[instruction.Op1.reg].value, org_reg_value, oper_value)
-
-            case ida_allins.NN_and:
-                self.gen_registers[instruction.Op1.reg].value &= oper_value
-
-            case ida_allins.NN_cmp:
-                result = __UINT__(self.gen_registers[instruction.Op1.reg].value - oper_value).value
-                self.flags.set_carry_sub(result, org_reg_value)
-                self.flags.set_overflow_sub(result, org_reg_value, oper_value)
-
-            case ida_allins.NN_dec:
-                self.gen_registers[instruction.Op1.reg].value -= 1
-                self.flags.set_overflow_sub(self.gen_registers[instruction.Op1.reg].value, org_reg_value, 1)
-
-            case ida_allins.NN_imul:
-                self.flags.reset()
-                left_value : int = __INT__(self.gen_registers[instruction.Op1.reg].value).value
-                right_value: int = __INT__(oper_value).value
-                print(f"[i] iMultiplying {left_value:#x} by {right_value:#x}")
-                self.gen_registers[instruction.Op1.reg].value = left_value * right_value
-                self.flags.set_overflow_imul(__INT__(org_reg_value).value, __INT__(oper_value).value)
-
-            case ida_allins.NN_inc:
-                self.gen_registers[instruction.Op1.reg].value += 1
-                self.flags.set_overflow_add(self.gen_registers[instruction.Op1.reg].value, org_reg_value, 1)
-
-            case ida_allins.NN_not:
-                self.gen_registers[instruction.Op1.reg].value = ~self.gen_registers[instruction.Op1.reg].value
-
-            case ida_allins.NN_or:
-                self.gen_registers[instruction.Op1.reg].value |= oper_value
-
-            case ida_allins.NN_sub:
-                self.gen_registers[instruction.Op1.reg].value -= oper_value
-                result = self.gen_registers[instruction.Op1.reg].value
-                self.flags.set_carry_sub(self.gen_registers[instruction[0].reg].value, org_reg_value)
-                self.flags.set_overflow_sub(self.gen_registers[instruction[0].reg].value, org_reg_value, oper_value)
-                if org_reg_value - oper_value < 0:
-                    self.gen_registers[instruction[0].reg].value = 0
-
-            case ida_allins.NN_test:
-                result = self.gen_registers[instruction.Op1.reg].value & oper_value
-
-            case ida_allins.NN_xor:
-                self.gen_registers[instruction.Op1.reg].value ^= oper_value
-
-            case default:
-                print(f'Unhandled mnemonic of const {hex(instruction.itype)} @{instruction.ea:x}')
-                return False
-
-        if not instruction.itype == ida_allins.NN_sub:
-            result = self.gen_registers[instruction.Op1.reg].value
-
-        self.flags.update(result)
-        print(self)
-        return True
-
     def eval_cond_jump(self, instruction_type: int)->bool:
         match instruction_type:
             case ida_allins.NN_jo   : return self.flags.overflow
@@ -581,7 +398,7 @@ class InstructionHelper:
         while next_addr <= self.inst.Op1.addr:
             second_referer: ea_t = get_next_cref_to(eval_instruction.ea, get_first_cref_to(eval_instruction.ea))
 
-            if second_referer != idc.BADADDR and second_referer != idc.BADADDR != self.inst.ea:
+            if second_referer != BADADDR and second_referer != BADADDR != self.inst.ea:
                 return False
 
             elif not ida_bytes.is_code(ida_bytes.get_flags(next_addr)):
@@ -600,42 +417,29 @@ class InstructionHelper:
 
     def are_skipped_unexplored_bytes_junk(self)->tuple:
         current_address: ea_t = self.inst.ea
-        first_xref: int
+        first_xref     : int
         while current_address <= self.inst.Op1.addr:
             first_xref = get_first_cref_to(current_address)
-            if first_xref in [idc.BADADDR, 0]:
+            if first_xref in [BADADDR, 0]:
                 current_address += 1
                 continue
 
-            elif get_next_cref_to(current_address, first_xref) != idc.BADADDR:
+            elif get_next_cref_to(current_address, first_xref) != BADADDR:
                 return SkippedDataState.FINISHED_IS_NOT_JUNK, current_address
 
-            elif ida_bytes.is_code(ida_bytes.get_flags(current_address)):
-                return SkippedDataState.NOT_FINISHED_IS_CODE, current_address
+            elif ida_bytes.is_code(ida_bytes.get_flags(current_address)): return SkippedDataState.NOT_FINISHED_IS_CODE, current_address
 
             print(f'[i] adding 1, Current Address {current_address:x}, Destination Address: {self.inst.Op1.addr}')
             current_address += 1
+
         return SkippedDataState.FINISHED_IS_JUNK, current_address
 
-    def contains_displ(self)->bool:
-        self.validate_operands()
-        return ida_ua.o_displ in self.operand_types
+    def contains_displ(self)->bool : return ida_ua.o_displ in self.operand_types
+    def contains_imm( self)->bool  : return ida_ua.o_imm  in self.operand_types
+    def contains_near(self)->bool  : return ida_ua.o_imm in self.operand_types
+    def contains_phrase(self)->bool: return ida_ua.o_phrase in self.operand_types
 
-    def contains_imm( self)->bool:
-        self.validate_operands()
-        return ida_ua.o_imm  in self.operand_types
-
-    def contains_near(self)->bool:
-        self.validate_operands()
-        return ida_ua.o_imm in self.operand_types
-
-    def contains_phrase(self)->bool:
-        self.validate_operands()
-        return ida_ua.o_phrase in self.operand_types
-
-    def contains_reg(self)->bool:
-        self.validate_operands()
-        return ida_ua.o_reg  in self.operand_types
+    def contains_reg(self)->bool: return ida_ua.o_reg  in self.operand_types
 
     def get_operand_objects(self)->list[ida_ua.op_t]:
         for i in range(__OPER_COUNT__):
@@ -687,66 +491,53 @@ class InstructionHelper:
             return 0
         return addresses_delta
 
-    def is_arithmetic_add(self)->bool:
-        return self.inst_type in [ida_allins.NN_add, ida_allins.NN_sub, ida_allins.NN_dec, ida_allins.NN_inc]
+    def is_arithmetic_add(self)->bool: return self.inst_type in [ida_allins.NN_add, ida_allins.NN_sub, ida_allins.NN_dec, ida_allins.NN_inc]
 
-    def is_arithmetic_mul(self):
-        return self.inst_type in [ida_allins.NN_div, ida_allins.NN_mul, ida_allins.NN_idiv, ida_allins.NN_imul]
+    def is_arithmetic_mul(self): return self.inst_type in [ida_allins.NN_div, ida_allins.NN_mul, ida_allins.NN_idiv, ida_allins.NN_imul]
 
-    def is_bitwise_op(self)->bool:
-        return self.inst.itype in [ida_allins.NN_and, ida_allins.NN_or, ida_allins.NN_xor, ida_allins.NN_not]
+    def is_bitwise_op(self)->bool: return self.inst.itype in [ida_allins.NN_and, ida_allins.NN_or, ida_allins.NN_xor, ida_allins.NN_not]
 
-    def is_comparative(self)->bool:
-        return self.inst.itype in [ida_allins.NN_cmp, ida_allins.NN_test]
+    def is_comparative(self)->bool: return self.inst.itype in [ida_allins.NN_cmp, ida_allins.NN_test]
 
-    def is_stack_op(self)->bool:
-        return self.inst.itype in [ida_allins.NN_push, ida_allins.NN_pop, ida_allins.NN_pusha, ida_allins.NN_popa]
+    def is_stack_op(self)->bool: return self.inst.itype in [ida_allins.NN_push, ida_allins.NN_pop, ida_allins.NN_pusha, ida_allins.NN_popa]
 
-    def is_call_inst(self)->bool:
-        return ida_allins.NN_call <= self.inst.itype <= ida_allins.NN_callni
+    def is_call_inst(self)->bool: return ida_allins.NN_call <= self.inst.itype <= ida_allins.NN_callni
 
-    def is_cond_jump(self)->bool:
-        return ida_allins.NN_ja <= self.inst.itype <= ida_allins.NN_jz
+    def is_cond_jump(self)->bool: return ida_allins.NN_ja <= self.inst.itype <= ida_allins.NN_jz
 
-    def is_cond_mov(self)->bool:
-        return ida_allins.NN_cmova <= self.inst.itype <= ida_allins.NN_cmovz
+    def is_cond_mov(self)->bool: return ida_allins.NN_cmova <= self.inst.itype <= ida_allins.NN_cmovz
 
     def is_junk_condition(self, eval_start: ea_t)->bool:
-        curr_helper  = InstructionHelper(DecodeInstruction(prev_head(self.inst.ea, 0)))
-        current_eval_instruction: ida_ua.insn_t = DecodeInstruction(eval_start)
-        curr_helper.validate_operands()
-
-        if (curr_helper.is_arithmetic_add()  and curr_helper.inst.Op1.type == ida_ua.o_reg
-        or  curr_helper.is_comparative() and ida_ua.o_phrase not in curr_helper.operand_types):
+        prev_inst_helper        : InstructionHelper  = InstructionHelper(DecodeInstruction(prev_head(self.inst.ea, 0)))
+        current_eval_instruction: ida_ua.insn_t      = DecodeInstruction(eval_start)
+        prev_inst_helper.validate_operands()
+        if (prev_inst_helper.is_arithmetic_add()  and prev_inst_helper.inst[0].type == ida_ua.o_reg
+        or  prev_inst_helper.is_comparative() and ida_ua.o_phrase not in prev_inst_helper.operand_types):
 
             while current_eval_instruction.ea <= self.inst.ea:
 
                 if current_eval_instruction.itype == ida_allins.NN_mov:
-                    if current_eval_instruction.Op1.reg  == curr_helper.inst.Op1.reg:
-                        if current_eval_instruction.Op2.type == ida_ua.o_imm:
-                            return True
+                    if current_eval_instruction[0].reg  == prev_inst_helper.inst[0].reg:
+                        if current_eval_instruction.Op2.type == ida_ua.o_imm: return True
 
                 current_eval_instruction = DecodeInstruction(current_eval_instruction.ea + current_eval_instruction.size)
 
         return False
 
     def is_non_cond_mov(self)->bool:
-        if not ida_allins.NN_mov <= self.inst.itype <= ida_allins.NN_movzx:
-            if not ida_allins.NN_movaps <= self.inst.itype <= ida_allins.NN_movups:
-                if not ida_allins.NN_movapd <= self.inst.itype <= ida_allins.NN_movupd:
-                    if not ida_allins.NN_movddup <= self.inst.itype <= ida_allins.NN_movsxd:
-                        return  False
+        if not ida_allins.NN_mov <= self.inst_type <= ida_allins.NN_movzx:
+            if not ida_allins.NN_movaps <= self.inst_type <= ida_allins.NN_movups:
+                if not ida_allins.NN_movapd <= self.inst_type <= ida_allins.NN_movupd:
+                    if not ida_allins.NN_movddup <= self.inst_type <= ida_allins.NN_movsxd: return  False
         return True
 
-    def is_non_cond_jump(self)->bool:
-        return ida_allins.NN_jmp <= self.inst.itype <= ida_allins.NN_jmpshort
+    def is_non_cond_jump(self)->bool: return ida_allins.NN_jmp <= self.inst_type <= ida_allins.NN_jmpshort
 
     def validate_operands(self)->bool:
         if not self.operand_types:
             if not self.operands:
                 self.get_operand_objects()
-                if not len(self.operands):
-                    return False
+                if not len(self.operands): return False
             self.get_operands_types()
         return True
 
@@ -754,214 +545,378 @@ class InstructionHelper:
         self.inst           = instruction
         self.operands       = []
         self. operand_types = []
-
-    def get_oper_value(self, operand_index: int, context: CpuContext, stack: StackFrame)-> int | str | None:
         self.validate_operands()
-        try:
-            if len(self.operands) <= operand_index:
-                raise IndexError
-            operand: ida_ua.op_t = self.operands[operand_index]
-            match operand.type:
-                case ida_ua.o_imm  : return operand.value
-                case ida_ua.o_reg  : return context.gen_registers[operand.reg].value
-                case ida_ua.o_displ:
-                    offset =  __INT__(operand.addr).value
-                    match operand.reg:
-                        case procregs.esp.reg: return stack.data[context.reg_sp + offset].data
-                        case procregs.ebp.reg: return stack.data[context.reg_bp + offset].data
 
-                    return __HEAP_REF__
-
-                case ida_ua.o_phrase:
-                    match operand.reg:
-                        case procregs.esp.reg: return stack.data[stack.top].data
-                        case procregs.ebp.reg: return stack.data[stack.base].data
-
-                    return __HEAP_REF__
-
-        except IndexError:
-            exit(f'Error Code: 3\n@{self.inst.ea:x}InstructionHelper.get_oper_value encountered an IndexError, with calculated index: {hex(operand_index)}')
-
-    def retrieve_stack_addr(self, context:CpuContext)->int:
-        if not self.validate_stack_regs_op():
-            return 0
-        match self.operand_types[0]:
-            case ida_ua.o_reg:
-                return context.gen_registers[self.inst[0].reg].value
-
-            case ida_ua.o_phrase:
-                return self.inst[0].phrase
-
-            case ida_ua.o_displ:
-                return context.gen_registers[self.inst[0].phrase].value + __INT__(self.inst[0].addr).value
-
+    def retrieve_stack_addr(self, context: CpuContext, i: int)->int:
+        match self.operand_types[i]:
+            case ida_ua.o_phrase | ida_ua.o_displ: return context.gen_registers[self.operands[i].phrase].value + __INT__(self.inst[0].addr).value
         return -1
 
-    def validate_stack_regs_op(self)->bool:
-        if not self.validate_operands():
-            print(f'[x] Failed to validate Operands @{self.inst.ea:x}')
-            return False
-
+    def validate_stack_ref(self)->bool:
+        reg_const: int = -1
         match self.operand_types[0]:
-            case ida_ua.o_reg:
-                return self.operands[0].reg in [procregs.esp.reg, procregs.ebp.reg]
+            case ida_ua.o_phrase | ida_ua.o_displ: return self.operands[0].phrase in [procregs.esp.reg, procregs.ebp.reg]
+            case default: return False
 
-            case ida_ua.o_phrase | ida_ua.o_displ:
-                return self.operands[0].phrase in [procregs.esp.reg, procregs.ebp.reg]
 
-        return False
+    @staticmethod
+    def is_in_ascii(candidate_value: int)->bool:
+        return 0x20 <= candidate_value <= 0x80
 
-def main(effective_address: ea_t              = idc.here(),
-         context          : CpuContext        = CpuContext(),
-         jump_count       : int               = 0,
-         helper           : InstructionHelper = InstructionHelper())->int:
-    stack      : StackFrame    = StackFrame(effective_address, context.reg_bp, context.reg_sp)
-    eval_start : ea_t          = effective_address
+class EmulationManager:
+    def __init__(self, starting_point: ea_t)->None:
+        """
+        Overview: This object is the highest level of the API, it holds (currently) 3 very important context objects.
+            1. cpu    - CpuContext
+            2. stack  - StackFrame
+            3. helper - InstructionHelper
+
+        Arguments:
+            starting_point: ea_t -
+        """
+        self.cpu   : CpuContext        = CpuContext()
+        self.stack : StackFrame        = StackFrame(starting_point, self.cpu.reg_bp, self.cpu.reg_sp)
+        self.helper: InstructionHelper = InstructionHelper()
+        self.effective_address: ea_t   = starting_point
+
+    def __repr__(self):
+        return f'{self.cpu.__repr__()}\n{self.stack.__repr__()}'
+
+    @property
+    def ea(self)->ea_t:
+        return self.effective_address
+
+    @ea.setter
+    def ea(self, address: int | ea_t)->None: self.effective_address = address
+
+    @property
+    def stk_last_referenced_data(self)->StackData: return self.stack.data[self.stack.last_index]
+
+
+    def extract_oper_value(self, i: int)->int    :
+        """
+        Overview:
+            A high level method used to extract the data stored in an operand, no matter the operand type.\n
+
+        Arguments:
+            i: int: The input argument 'i', is the operand index to be used, because of the inner workings of the "InstructionHelper" class, the operands can be accessed like a normal python list. (i.e. -1 is a valid index in the list.)
+
+        Returns:
+            This method returns an integer, if the stored data is complex data type, a pointer to it will be handed back, and higher level methods/functions are meant to handle the output accordingly
+        """
+        try:
+            if -i < len(self.helper.operands) <= i: raise IndexError
+            oper_t: ida_ua.op_t = self.helper.operands[i]
+            match oper_t.type:
+                case ida_ua.o_imm                    : return oper_t.value
+                case ida_ua.o_reg                    : return self.cpu.gen_registers[oper_t.reg].value
+                case ida_ua.o_displ | ida_ua.o_phrase:
+                    if oper_t.type == ida_ua.o_phrase: raise NotImplementedError
+                    offset    : int =  __INT__(oper_t.addr).value
+                    stack_addr: int = -1
+                    match oper_t.phrase:
+                        case procregs.esp.reg: stack_addr = self.cpu.reg_sp + offset
+                        case procregs.ebp.reg: stack_addr = self.cpu.reg_bp + offset
+
+                    stack_data: StackData | None = self.stack.data[stack_addr]
+                    if not isinstance(stack_data, StackData): raise  NotImplementedError
+                    if not isinstance(stack_data.data, int) : return self.stack.data[self.cpu.reg_bp + offset].addr
+                    else                                    : return stack_data.data
+
+            raise NotImplementedError
+
+        except IndexError or NotImplementedError:
+            exit(f'Error Code: 3\n@{self.helper.inst.ea:x}InstructionHelper.get_oper_value encountered an IndexError, with calculated index: {i:#x}')
+
+    def handle_operation_cpu(self, oper_value: int | str | None = 1)->bool:
+        org_reg_value: int = self.cpu.gen_registers[self.helper.inst.Op1.reg].value
+
+        if self.helper.inst_type == ida_allins.NN_mov:
+            if self.helper.operand_types[0] == ida_ua.o_reg:
+                self.cpu.gen_registers[self.helper.operands[0].reg].value = oper_value
+            print(self)
+            return True
+
+        elif self.helper.inst_type in [ida_allins.NN_inc, ida_allins.NN_dec]:
+            org_carry = self.cpu.flags.carry
+            self.cpu.flags.reset()
+            self.cpu.flags.carry = org_carry
+
+        else:
+            self.cpu.flags.reset()
+        result: int = -1
+        match self.helper.inst_type:
+            case ida_allins.NN_add:
+                self.cpu.gen_registers[self.helper.operands[0].reg].value += oper_value
+                self.cpu.flags.set_carry_add(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value)
+                self.cpu.flags.set_overflow_add(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value, oper_value)
+
+            case ida_allins.NN_and:
+                self.cpu.gen_registers[self.helper.operands[0].reg].value &= oper_value
+
+            case ida_allins.NN_cmp:
+                result = __UINT__(self.cpu.gen_registers[self.helper.operands[0].reg].value - oper_value).value
+                self.cpu.flags.set_carry_sub(result, org_reg_value)
+                self.cpu.flags.set_overflow_sub(result, org_reg_value, oper_value)
+
+            case ida_allins.NN_dec:
+                self.cpu.gen_registers[self.helper.operands[0].reg].value -= 1
+                self.cpu.flags.set_overflow_sub(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value, 1)
+
+            case ida_allins.NN_imul:
+                self.cpu.flags.reset()
+                left_value : int = __INT__(self.cpu.gen_registers[self.helper.operands[0].reg].value).value
+                right_value: int = __INT__(oper_value).value
+                print(f"[i] iMultiplying {left_value:#x} by {right_value:#x}")
+                self.cpu.gen_registers[self.helper.operands[0].reg].value = left_value * right_value
+                self.cpu.flags.set_overflow_imul(__INT__(org_reg_value).value, __INT__(oper_value).value)
+
+            case ida_allins.NN_inc:
+                self.cpu.gen_registers[self.helper.operands[0].reg].value += 1
+                self.cpu.flags.set_overflow_add(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value, 1)
+
+            case ida_allins.NN_not:
+                self.cpu.gen_registers[self.helper.operands[0].reg].value = ~self.cpu.gen_registers[self.helper.inst.Op1.reg].value
+
+            case ida_allins.NN_or:
+                self.cpu.gen_registers[self.helper.operands[0].reg].value |= oper_value
+
+            case ida_allins.NN_sub:
+                self.cpu.gen_registers[self.helper.operands[0].reg].value -= oper_value
+                result = self.cpu.gen_registers[self.helper.operands[0].reg].value
+                self.cpu.flags.set_carry_sub(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value)
+                self.cpu.flags.set_overflow_sub(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value, oper_value)
+                if org_reg_value - oper_value < 0:
+                    self.cpu.gen_registers[self.helper.operands[0].reg].value = 0
+
+            case ida_allins.NN_test:
+                result = self.cpu.gen_registers[self.helper.operands[0].reg].value & oper_value
+
+            case ida_allins.NN_xor:
+                self.cpu.gen_registers[self.helper.operands[0].reg].value ^= oper_value
+
+            case default:
+                print(f'Unhandled mnemonic of const {hex(self.helper.inst_type)} @{self.ea:x}')
+                return False
+
+        if not self.helper.inst_type == ida_allins.NN_sub:
+            result = self.cpu.gen_registers[self.helper.operands[0].reg].value
+        self.stack.top = self.cpu.reg_sp
+        self.stack.base = self.cpu.reg_bp
+        self.cpu.flags.update(result)
+        print(self.__repr__())
+        return True
+
+
+    def handle_operation_stack(self, oper_value: int, new_index: int | None = None)->int:
+        """This method handles the "StackFrame" class' data members when a PUSH or a POP operation is identified.\n
+        This method returns the current stack offset to help evaluate the SP correctness."""
+        try:
+            match self.helper.inst_type:
+                case ida_allins.NN_mov:
+                    size    = REG_BYTES_SIZE
+                    dt_type = DataTypes.DWORD
+                    match self.helper.operands[-1].dtype:
+                        case ida_ua.dt_byte : size, dt_type = 1, DataTypes.BYTE
+                        case ida_ua.dt_word : size, dt_type = 2, DataTypes.WORD
+                        case ida_ua.dt_dword: size          = 4
+                        case ida_ua.dt_qword: size, dt_type = 8, DataTypes.QWORD
+
+                    if self.helper.is_in_ascii(oper_value):
+                        if self.stk_last_referenced_data.is_string() or self.stk_last_referenced_data.is_char():
+                            if new_index == self.stk_last_referenced_data.addr + self.stk_last_referenced_data.size:
+                                self.stk_strcat(chr(oper_value), size)
+                                self.stk_last_referenced_data.type = DataTypes.STRING
+                                print(self.__repr__())
+                                return oper_value
+                        oper_value            = chr(oper_value)
+                        dt_type               = DataTypes.CHAR
+                        self.stack.last_index = new_index
+
+                    elif oper_value == 0:
+                        if size & 3:
+                            if self.stk_last_referenced_data.is_string():
+                                self.stk_last_referenced_data.size += size
+                                print(self.__repr__())
+                                return oper_value
+
+                    self.stack.last_index = new_index
+
+                    start_address: int  = 0
+                    match self.helper.operands[0].reg:
+                        case procregs.esp.reg: start_address = self.stack.top
+                        case procregs.ebp.reg: start_address = self.stack.base
+                    self.stack.add_data(StackData(oper_value, self.stack.last_index, size, self.stack.base - (start_address +  __INT__(self.helper.operands[0].addr).value), dt_type))
+
+                case ida_allins.NN_push:
+                    self.cpu.reg_sp          -= 0x4
+                    self.stack.top           -= 0x4
+                    self.stack.last_index     = self.stack.top
+                    self.stack.top_stored_var = self.stack.top
+                    self.stack.add_data(StackData(oper_value, self.stack.top, 4, self.stack.base - self.stack.top, DataTypes.DWORD))
+
+                case ida_allins.NN_pop:
+                    popped_stack_data: StackData = self.stack.data.pop(self.stack.top_stored_var)
+                    self.cpu.reg_sp             += 4
+                    self.stack.top              += 4
+                    self.stack.last_index        = self.stack.top
+                    self.stack.top_stored_var    = self.stack.top
+                    popped_data: int
+                    if isinstance(popped_stack_data.data  , str): popped_data = popped_stack_data.addr
+                    elif isinstance(popped_stack_data.data, int): popped_data = popped_stack_data.data
+                    else                                        : raise NotImplementedError
+                    return popped_data
+
+                case ida_allins.NN_popa:
+                    self.stack.last_index           = self.stack.top
+                    self.stack.top, self.cpu.reg_sp = self.stack.top + 0x14, self.cpu.reg_sp + 0x14
+
+
+                case ida_allins.NN_pusha:
+                    self.stack.last_index     = self.stack.top
+                    self.stack.top           -= 0x14
+
+
+                case default: raise NotImplementedError
+            self.stack.top_stored_var = self.stack.top
+            print(self.__repr__())
+            return self.stack.last_index
+
+        except NotImplementedError:
+            exit(-1)
+
+    def stk_strcat(self, string: str, size)->None:
+        self.stk_last_referenced_data.data += string
+        self.stk_last_referenced_data.size += size
+        if self.stk_last_referenced_data.is_char()    : self.stk_last_referenced_data.type = DataTypes.STRING
+        if len(self.stk_last_referenced_data.data) > 8: self.stack.longest_str_len         = len(self.stk_last_referenced_data.data)
+
+
+def main(e_manager: EmulationManager = EmulationManager(here()), jump_count:int = 0)->int:
+    eval_start: ea_t = e_manager.ea
     instruction: ida_ua.insn_t
     while True:
-        print(f'{effective_address:x}')
-        context.gen_registers[procregs.eip.reg].value = effective_address
-        instruction = DecodeInstruction(effective_address)
-        if jump_count >= __JUMP_LIMIT__:
-            break
+        print(f'{e_manager.ea:x}')
+        e_manager.cpu.gen_registers[procregs.eip.reg].value = e_manager.ea
+        instruction                                        = DecodeInstruction(e_manager.ea)
+        if jump_count >= __JUMP_LIMIT__: break
 
         if not instruction:
-            print(f'[✕] Not code @{effective_address:x}, breaking the loop.')
+            print(f'[✕] Not code @{e_manager.ea:x}, breaking the loop.')
             break
 
         elif instruction.itype in [ida_allins.NN_retn, ida_allins.NN_retf]:
-            idc.jumpto(effective_address)
+            jumpto(e_manager.ea)
             break
 
-        helper.set_instruction(instruction)
+        e_manager.helper.set_instruction(instruction)
 
-        if helper.is_stack_op():
-            oper_value = helper.get_oper_value(0, context, stack)
-            match helper.inst.itype:
-                case ida_allins.NN_push:
-                    context.reg_sp -= 4
-
-                case ida_allins.NN_pop:
-                    context.reg_sp += 4
-            res = stack.handle_stack_operation(instruction, oper_value)
+        if e_manager.helper.is_stack_op():
+            res = e_manager.handle_operation_stack(e_manager.extract_oper_value(0), e_manager.stack.top)
             if instruction.itype == ida_allins.NN_pop:
-                context.gen_registers[instruction.Op1.reg].value = res
-            print(context)
+                e_manager.cpu.gen_registers[instruction.Op1.reg].value = res
+            print(e_manager.cpu)
 
-        elif helper.is_comparative():
-            if not context.update_regs_n_flags(instruction, helper.get_oper_value(-1, context, stack)):
-                idc.jumpto(effective_address)
+        elif e_manager.helper.is_comparative():
+            if not e_manager.handle_operation_cpu( e_manager.extract_oper_value(-1)):
                 break
 
-        elif helper.is_bitwise_op():
-            if not context.update_regs_n_flags(instruction, helper.get_oper_value(-1, context, stack)):
-                idc.jumpto(effective_address)
+        elif e_manager.helper.is_bitwise_op():
+            if not e_manager.handle_operation_cpu(e_manager.extract_oper_value(-1)):
+                jumpto(e_manager.ea)
                 break
 
-        elif helper.is_cond_jump():
+        elif e_manager.helper.is_cond_jump():
             print("[i] Evaluating a conditional jump")
-            if context.eval_cond_jump(instruction.itype):
+            if e_manager.cpu.eval_cond_jump(instruction.itype):
 
-                if helper.is_junk_condition(eval_start):
-                    print(f'[✓] Conditional jump @{effective_address:x} of type: {hex(instruction.itype)} has been found to be junk!')
+                if e_manager.helper.is_junk_condition(eval_start):
+                    print(f'[✓] Conditional jump @{e_manager.ea:x} of type: {hex(instruction.itype)} has been found to be junk!')
                 else:
-                    print(f'[i] Conditional jump @{effective_address:x} of type: {hex(instruction.itype)} has been found NOT to be junk!')
-                if not helper.handle_forward_movement():
+                    print(f'[i] Conditional jump @{e_manager.ea:x} of type: {hex(instruction.itype)} has been found NOT to be junk!')
+                if not e_manager.helper.handle_forward_movement():
                     print('[✕] Handle Forward Movement Failed! breaking the loop')
                     break
-                effective_address = instruction.Op1.addr
-                eval_start        = effective_address
+                e_manager.ea = instruction.Op1.addr
+                eval_start        = e_manager.ea
                 jump_count       += 1
             else:
-                effective_address += instruction.size
+                e_manager.ea += instruction.size
             continue
 
-        elif helper.is_cond_mov():
-            if context.eval_cond_mov(instruction.itype):
+        elif e_manager.helper.is_cond_mov():
+            if e_manager.cpu.eval_cond_mov(instruction.itype):
                 instruction.itype = ida_allins.NN_mov
-                context.update_regs_n_flags(instruction, helper.get_oper_value(-1, context, stack))
+                e_manager.handle_operation_cpu( e_manager.extract_oper_value(-1))
 
-        elif helper.is_non_cond_jump():
+        elif e_manager.helper.is_non_cond_jump():
             exec_flow_shift_msg(instruction)
-            if not helper.handle_forward_movement():
+            if not e_manager.helper.handle_forward_movement():
                 exit(-4)
-            effective_address = instruction.Op1.addr
-            eval_start        = effective_address
+            e_manager.ea = instruction.Op1.addr
+            eval_start        = e_manager.ea
             jump_count       += 1
-            effective_address = instruction.Op1.addr
+            e_manager.ea = instruction.Op1.addr
 
             continue
 
-        elif helper.is_call_inst():
+        elif e_manager.helper.is_call_inst():
             print(f'[i] Called @{instruction.Op1.addr:x} from {instruction.ea:x}')
-            if not helper.are_skipped_instructions_junk():
-                stack = stack.create_called_frame(instruction.Op1.addr, context.reg_bp, context.reg_sp)
+            if not e_manager.helper.are_skipped_instructions_junk():
+                e_manager.stack = e_manager.stack.create_called_frame(instruction.Op1.addr, e_manager.cpu.reg_bp, e_manager.cpu.reg_sp)
 
-            if not helper.handle_forward_movement():
+            if not e_manager.helper.handle_forward_movement():
                 print('[✕] Handle Forward Movement Failed! breaking the loop')
                 break
 
-            effective_address = instruction.Op1.addr
-            eval_start        = effective_address
+            e_manager.ea = instruction.Op1.addr
+            eval_start        = e_manager.ea
             jump_count       += 1
             continue
 
-        elif helper.is_arithmetic_add():
-            value = helper.get_oper_value(1, context, stack)
-            if helper.validate_stack_regs_op():
-                reg: int = -1
+        elif e_manager.helper.is_arithmetic_add():
+            op_value: int = e_manager.extract_oper_value(1)
+            if e_manager.helper.validate_stack_ref():
+                reg_const: int = -1
                 match instruction.Op1.type:
                     case ida_ua.o_reg:
-                        reg = instruction.Op1.reg
+                        reg_const = instruction.Op1.reg
 
                     case ida_ua.o_displ | ida_ua.o_phrase:
-                        reg  = instruction.Op1.phrase
+                        reg_const  = instruction.Op1.phrase
 
                     case default:
-                        idc.jumpto(effective_address)
+                        jumpto(e_manager.ea)
                         break
+                new_index = e_manager.cpu.gen_registers[reg_const].value + __INT__(instruction.Op1.addr).value
+                e_manager.handle_operation_stack(op_value, new_index)
 
-                new_index = context.gen_registers[reg].value + __INT__(instruction.Op1.addr).value
-
-                match instruction.Op2.type:
-                    case ida_ua.o_reg:
-                        stack.handle_stack_operation(instruction, value, context.gen_registers[reg].value)
-
-                    case ida_ua.o_imm:
-                        stack.handle_stack_operation(instruction, value, new_index)
-
-                    case ida_ua.o_phrase:
-                        stack.handle_stack_operation(instruction, stack.data[context.gen_registers[instruction.Op2.phrase].value], new_index)
-
-                    case ida_ua.o_displ:
-                        stack.handle_stack_operation(instruction, stack.data[context.gen_registers[instruction.Op2.phrase].value + __INT__(instruction.Op2.addr).value], new_index)
-
-            if not context.update_regs_n_flags(instruction, value):
-                idc.jumpto(effective_address)
+            if not e_manager.handle_operation_cpu(op_value):
+                jumpto(e_manager.ea)
                 break
 
-        elif helper.is_arithmetic_mul():
-            oper_value = helper.get_oper_value(-1, context, stack)
-            context.update_regs_n_flags(instruction, oper_value)
+        elif e_manager.helper.is_arithmetic_mul():
+            oper_value = e_manager.extract_oper_value(-1)
+            e_manager.handle_operation_cpu(oper_value)
 
-        elif helper.is_non_cond_mov():
-            oper_value = helper.get_oper_value(-1,context, stack)
-            if not helper.validate_stack_regs_op():
+        elif e_manager.helper.is_non_cond_mov():
+            oper_value =  e_manager.extract_oper_value(-1)
+            if not e_manager.helper.validate_stack_ref():
                 if instruction.Op1.type == ida_ua.o_reg:
-                    context.update_regs_n_flags(instruction, oper_value)
+                    e_manager.handle_operation_cpu(oper_value)
 
             else:
-                stack.handle_stack_operation(instruction, helper.get_oper_value(1, context, stack), helper.retrieve_stack_addr(context))
+                e_manager.handle_operation_stack(e_manager.extract_oper_value(1), e_manager.helper.retrieve_stack_addr(e_manager.cpu, 0))
 
         else:
-            idc.jumpto(effective_address)
-            print(f"[?] But, What Is That?! @{effective_address:x}")
+            jumpto(e_manager.ea)
+            print(f"[?] But, What Is That?! @{e_manager.ea:x}")
             break
 
-        effective_address += instruction.size
+        e_manager.ea += instruction.size
 
-    print(context, stack)
-    idc.jumpto(effective_address)
+    print(e_manager.cpu.__repr__(), e_manager.stack.__repr__())
+    jumpto(e_manager.ea)
     return 0
 
 def exec_flow_shift_msg(instruction: ida_ua.insn_t)->None:

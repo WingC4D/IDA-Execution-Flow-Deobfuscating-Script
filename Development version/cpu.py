@@ -2,6 +2,7 @@ from flags import FlagsContext
 from my_globals import __INT__, __UINT__, __sBITS__, __32bit__
 import ida_allins, ida_ua
 from idautils import procregs
+from idaapi import ea_t
 class CpuContext:
     """CPU Context Class:\n
     - This class holds context to all registers & flags (currently of a 32bit processor)\n
@@ -78,6 +79,10 @@ class CpuContext:
     @property
     def reg_ip(self): return self.gen_registers[procregs.eip.reg].value
 
+    @reg_ip.setter
+    def reg_ip(self, new_value: int | ea_t)->None:
+        self.gen_registers[procregs.eip.reg].value = new_value
+        return
     def __repr__(self)->str: return f"""CPU Context:
 - Architecture: {__sBITS__}bit Intel || AMD\n\n- Integer Registers:\n\tReg_AX: {hex(self.reg_ax)}
 \tReg_BX: {hex(self.reg_bx)}
@@ -93,6 +98,7 @@ class CpuContext:
 
     def update_regs_n_flags(self, instruction: ida_ua.insn_t, oper_value: int | str | None = 1)->bool:
         org_reg_value: int = self.gen_registers[instruction.Op1.reg].value
+
         if instruction.itype == ida_allins.NN_mov:
             if instruction.Op1.type == ida_ua.o_reg:
                 self.gen_registers[instruction.Op1.reg].value = oper_value

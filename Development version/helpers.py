@@ -2,6 +2,8 @@ import ida_ua, ida_bytes, ida_allins
 from idaapi import ea_t, prev_head
 from  idc import BADADDR
 from idautils import DecodeInstruction, procregs
+from pygments.lexer import default
+
 from my_globals import SkippedDataState, __INT__, __OPER_COUNT__, __HEAP_REF__
 from ida_xref import get_first_cref_to, get_next_cref_to
 from cpu import CpuContext
@@ -61,8 +63,7 @@ class InstructionHelper:
             elif get_next_cref_to(current_address, first_xref) != BADADDR:
                 return SkippedDataState.FINISHED_IS_NOT_JUNK, current_address
 
-            elif ida_bytes.is_code(ida_bytes.get_flags(current_address)):
-                return SkippedDataState.NOT_FINISHED_IS_CODE, current_address
+            elif ida_bytes.is_code(ida_bytes.get_flags(current_address)): return SkippedDataState.NOT_FINISHED_IS_CODE, current_address
 
             print(f'[i] adding 1, Current Address {current_address:x}, Destination Address: {self.inst.Op1.addr}')
             current_address += 1
@@ -70,23 +71,23 @@ class InstructionHelper:
         return SkippedDataState.FINISHED_IS_JUNK, current_address
 
     def contains_displ(self)->bool:
-        self.validate_operands()
+
         return ida_ua.o_displ in self.operand_types
 
     def contains_imm( self)->bool:
-        self.validate_operands()
+
         return ida_ua.o_imm  in self.operand_types
 
     def contains_near(self)->bool:
-        self.validate_operands()
+
         return ida_ua.o_imm in self.operand_types
 
     def contains_phrase(self)->bool:
-        self.validate_operands()
+
         return ida_ua.o_phrase in self.operand_types
 
     def contains_reg(self)->bool:
-        self.validate_operands()
+
         return ida_ua.o_reg  in self.operand_types
 
     def get_operand_objects(self)->list[ida_ua.op_t]:
@@ -139,29 +140,21 @@ class InstructionHelper:
             return 0
         return addresses_delta
 
-    def is_arithmetic_add(self)->bool:
-        return self.inst_type in [ida_allins.NN_add, ida_allins.NN_sub, ida_allins.NN_dec, ida_allins.NN_inc]
+    def is_arithmetic_add(self)->bool: return self.inst_type in [ida_allins.NN_add, ida_allins.NN_sub, ida_allins.NN_dec, ida_allins.NN_inc]
 
-    def is_arithmetic_mul(self):
-        return self.inst_type in [ida_allins.NN_div, ida_allins.NN_mul, ida_allins.NN_idiv, ida_allins.NN_imul]
+    def is_arithmetic_mul(self): return self.inst_type in [ida_allins.NN_div, ida_allins.NN_mul, ida_allins.NN_idiv, ida_allins.NN_imul]
 
-    def is_bitwise_op(self)->bool:
-        return self.inst.itype in [ida_allins.NN_and, ida_allins.NN_or, ida_allins.NN_xor, ida_allins.NN_not]
+    def is_bitwise_op(self)->bool: return self.inst.itype in [ida_allins.NN_and, ida_allins.NN_or, ida_allins.NN_xor, ida_allins.NN_not]
 
-    def is_comparative(self)->bool:
-        return self.inst.itype in [ida_allins.NN_cmp, ida_allins.NN_test]
+    def is_comparative(self)->bool: return self.inst.itype in [ida_allins.NN_cmp, ida_allins.NN_test]
 
-    def is_stack_op(self)->bool:
-        return self.inst.itype in [ida_allins.NN_push, ida_allins.NN_pop, ida_allins.NN_pusha, ida_allins.NN_popa]
+    def is_stack_op(self)->bool: return self.inst.itype in [ida_allins.NN_push, ida_allins.NN_pop, ida_allins.NN_pusha, ida_allins.NN_popa]
 
-    def is_call_inst(self)->bool:
-        return ida_allins.NN_call <= self.inst.itype <= ida_allins.NN_callni
+    def is_call_inst(self)->bool: return ida_allins.NN_call <= self.inst.itype <= ida_allins.NN_callni
 
-    def is_cond_jump(self)->bool:
-        return ida_allins.NN_ja <= self.inst.itype <= ida_allins.NN_jz
+    def is_cond_jump(self)->bool: return ida_allins.NN_ja <= self.inst.itype <= ida_allins.NN_jz
 
-    def is_cond_mov(self)->bool:
-        return ida_allins.NN_cmova <= self.inst.itype <= ida_allins.NN_cmovz
+    def is_cond_mov(self)->bool: return ida_allins.NN_cmova <= self.inst.itype <= ida_allins.NN_cmovz
 
     def is_junk_condition(self, eval_start: ea_t)->bool:
         prev_inst_helper        : InstructionHelper  = InstructionHelper(DecodeInstruction(prev_head(self.inst.ea, 0)))
@@ -174,8 +167,7 @@ class InstructionHelper:
 
                 if current_eval_instruction.itype == ida_allins.NN_mov:
                     if current_eval_instruction[0].reg  == prev_inst_helper.inst[0].reg:
-                        if current_eval_instruction.Op2.type == ida_ua.o_imm:
-                            return True
+                        if current_eval_instruction.Op2.type == ida_ua.o_imm: return True
 
                 current_eval_instruction = DecodeInstruction(current_eval_instruction.ea + current_eval_instruction.size)
 
@@ -185,19 +177,16 @@ class InstructionHelper:
         if not ida_allins.NN_mov <= self.inst_type <= ida_allins.NN_movzx:
             if not ida_allins.NN_movaps <= self.inst_type <= ida_allins.NN_movups:
                 if not ida_allins.NN_movapd <= self.inst_type <= ida_allins.NN_movupd:
-                    if not ida_allins.NN_movddup <= self.inst_type <= ida_allins.NN_movsxd:
-                        return  False
+                    if not ida_allins.NN_movddup <= self.inst_type <= ida_allins.NN_movsxd: return  False
         return True
 
-    def is_non_cond_jump(self)->bool:
-        return ida_allins.NN_jmp <= self.inst_type <= ida_allins.NN_jmpshort
+    def is_non_cond_jump(self)->bool: return ida_allins.NN_jmp <= self.inst_type <= ida_allins.NN_jmpshort
 
     def validate_operands(self)->bool:
         if not self.operand_types:
             if not self.operands:
                 self.get_operand_objects()
-                if not len(self.operands):
-                    return False
+                if not len(self.operands): return False
             self.get_operands_types()
         return True
 
@@ -205,12 +194,12 @@ class InstructionHelper:
         self.inst           = instruction
         self.operands       = []
         self. operand_types = []
+        self.validate_operands()
 
     def get_oper_value(self, operand_index: int, context: CpuContext, stack: StackFrame)-> int | str | None:
-        self.validate_operands()
+
         try:
-            if -operand_index < len(self.operands) <= operand_index:
-                raise IndexError
+            if -operand_index < len(self.operands) <= operand_index: raise IndexError
             oper_t: ida_ua.op_t = self.operands[operand_index]
             match oper_t.type:
                 case ida_ua.o_imm  : return oper_t.value
@@ -225,7 +214,7 @@ class InstructionHelper:
 
                 case ida_ua.o_phrase:
                     match oper_t.reg:
-                        case procregs.esp.reg: return stack.data[stack.top].data
+                        case procregs.esp.reg: return stack.data[stack.top ].data
                         case procregs.ebp.reg: return stack.data[stack.base].data
 
                     return __HEAP_REF__
@@ -233,31 +222,21 @@ class InstructionHelper:
         except IndexError:
             exit(f'Error Code: 3\n@{self.inst.ea:x}InstructionHelper.get_oper_value encountered an IndexError, with calculated index: {operand_index:#x}')
 
-    def retrieve_stack_addr(self, context:CpuContext)->int:
-        if not self.validate_stack_regs_op():
-            return 0
-        match self.operand_types[0]:
-            case ida_ua.o_reg:
-                return context.gen_registers[self.inst[0].reg].value
-
-            case ida_ua.o_phrase:
-                return self.inst[0].phrase
-
-            case ida_ua.o_displ:
-                return context.gen_registers[self.inst[0].phrase].value + __INT__(self.inst[0].addr).value
-
+    def retrieve_stack_addr(self, context: CpuContext, i: int)->int:
+        if not self.validate_stack_regs_op(): return 0
+        match self.operand_types[i]:
+            case ida_ua.o_reg                    : return context.gen_registers[self.inst[i].reg].value
+            case ida_ua.o_phrase | ida_ua.o_displ: return context.gen_registers[self.inst[i].phrase].value + __INT__(self.inst[0].addr).value
         return -1
 
     def validate_stack_regs_op(self)->bool:
-        if not self.validate_operands():
-            print(f'[x] Failed to validate Operands @{self.inst.ea:x}')
-            return False
-
+        reg_const: int = -1
         match self.operand_types[0]:
-            case ida_ua.o_reg:
-                return self.operands[0].reg in [procregs.esp.reg, procregs.ebp.reg]
+            case ida_ua.o_reg                    : reg_const = self.operands[0].reg
+            case ida_ua.o_phrase | ida_ua.o_displ: reg_const = self.operands[0].phrase
+            case default: return False
+        return reg_const in [procregs.esp.reg, procregs.ebp.reg]
 
-            case ida_ua.o_phrase | ida_ua.o_displ:
-                return self.operands[0].phrase in [procregs.esp.reg, procregs.ebp.reg]
-
-        return False
+    @staticmethod
+    def is_in_ascii(candidate_value: int)->bool:
+        return 0x20 <= candidate_value <= 0x80

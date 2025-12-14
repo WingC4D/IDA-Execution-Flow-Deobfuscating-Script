@@ -1,8 +1,8 @@
 from flags import FlagsContext
-from my_globals import __INT__, __UINT__, __sBITS__, __32bit__
-import ida_allins, ida_ua
+from my_globals import __UINT__, __sBITS__, __32bit__
+import ida_allins
 from idautils import procregs
-from idaapi import ea_t
+
 class CpuContext:
     """CPU Context Class:\n
     - This class holds context to all registers & flags (currently of a 32bit processor)\n
@@ -10,7 +10,7 @@ class CpuContext:
     Data Members:\n
     1. registers:\n
     - type: dict\n
-    - data: ctypes unsigned int in the cpu's bitness size\n
+    - data: ctypes unsigned int in the cpu's bit size\n
     - indexing: procregs.REG.reg\n
     2. flags:\n
     - type: FlagsContext
@@ -79,10 +79,6 @@ class CpuContext:
     @property
     def reg_ip(self): return self.gen_registers[procregs.eip.reg].value
 
-    @reg_ip.setter
-    def reg_ip(self, new_value: int | ea_t)->None:
-        self.gen_registers[procregs.eip.reg].value = new_value
-        return
     def __repr__(self)->str: return f"""CPU Context:
 - Architecture: {__sBITS__}bit Intel || AMD\n\n- Integer Registers:\n\tReg_AX: {hex(self.reg_ax)}
 \tReg_BX: {hex(self.reg_bx)}
@@ -95,85 +91,6 @@ class CpuContext:
 \tReg_IP: {hex(self.reg_ip)}
     
 - {self.flags}\n"""
-
-    def update_regs_n_flags(self, instruction: ida_ua.insn_t, oper_value: int | str | None = 1)->bool:
-        org_reg_value: int = self.gen_registers[instruction.Op1.reg].value
-
-        if instruction.itype == ida_allins.NN_mov:
-            if instruction.Op1.type == ida_ua.o_reg:
-                self.gen_registers[instruction.Op1.reg].value = oper_value
-            print(self)
-            return True
-
-        elif instruction in [ida_allins.NN_inc, ida_allins.NN_dec]:
-            org_carry = self.flags.carry
-            self.flags.reset()
-            self.flags.carry = org_carry
-
-        else:
-            self.flags.reset()
-
-        match instruction.itype:
-            case ida_allins.NN_add:
-                self.gen_registers[instruction.Op1.reg].value += oper_value
-                self.flags.set_carry_add(self.gen_registers[instruction.Op1.reg].value, org_reg_value)
-                self.flags.set_overflow_add(self.gen_registers[instruction.Op1.reg].value, org_reg_value, oper_value)
-
-            case ida_allins.NN_and:
-                self.gen_registers[instruction.Op1.reg].value &= oper_value
-
-            case ida_allins.NN_cmp:
-                comp_result = __UINT__(self.gen_registers[instruction.Op1.reg].value - oper_value)
-                self.flags.set_carry_sub(comp_result.value, org_reg_value)
-                self.flags.set_overflow_sub(comp_result.value, org_reg_value, oper_value)
-                self.flags.update(comp_result.value)
-                return True
-
-            case ida_allins.NN_dec:
-                self.gen_registers[instruction.Op1.reg].value -= 1
-                self.flags.set_overflow_sub(self.gen_registers[instruction.Op1.reg].value, org_reg_value, 1)
-
-            case ida_allins.NN_imul:
-                self.flags.reset()
-                left_value : int = __INT__(self.gen_registers[instruction.Op1.reg].value).value
-                right_value: int = __INT__(oper_value).value
-                print(f"[i] iMultiplying {left_value:x} by {right_value}")
-
-                self.gen_registers[instruction.Op1.reg].value = left_value * right_value
-                self.flags.set_overflow_imul(__INT__(org_reg_value).value, __INT__(oper_value).value)
-
-            case ida_allins.NN_inc:
-                self.gen_registers[instruction.Op1.reg].value += 1
-                self.flags.set_overflow_add(self.gen_registers[instruction.Op1.reg].value, org_reg_value, 1)
-
-            case ida_allins.NN_not:
-                self.gen_registers[instruction.Op1.reg].value = ~self.gen_registers[instruction.Op1.reg].value
-
-            case ida_allins.NN_or:
-                self.gen_registers[instruction.Op1.reg].value |= oper_value
-
-            case ida_allins.NN_sub:
-                self.gen_registers[instruction.Op1.reg].value -= oper_value
-                self.flags.set_carry_sub(self.gen_registers[instruction.Op1.reg].value, org_reg_value)
-                self.flags.set_overflow_sub(self.gen_registers[instruction.Op1.reg].value, org_reg_value, oper_value)
-
-            case ida_allins.NN_test:
-                test_result = self.gen_registers[instruction.Op1.reg].value & oper_value
-                self.flags.update(test_result)
-                print(self)
-                return True
-
-            case ida_allins.NN_xor:
-                self.gen_registers[instruction.Op1.reg].value ^= oper_value
-
-            case default:
-                print(f'Unhandled mnemonic of const {hex(instruction.itype)} @{instruction.ea:x}')
-
-                return False
-
-        self.flags.update(self.gen_registers[instruction.Op1.reg].value)
-        print(self)
-        return True
 
     def eval_cond_jump(self, instruction_type: int)->bool:
         match instruction_type:

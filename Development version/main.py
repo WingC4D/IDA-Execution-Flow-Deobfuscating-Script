@@ -31,12 +31,11 @@ def main(e_manager: EmulationManager = EmulationManager(here()), jump_count:int 
             print(e_manager.cpu)
 
         elif e_manager.helper.is_comparative():
-            if not e_manager.cpu.update_regs_n_flags(instruction, e_manager.extract_oper_value(-1)):
-                jumpto(e_manager.ea)
+            if not e_manager.handle_operation_cpu( e_manager.extract_oper_value(-1)):
                 break
 
         elif e_manager.helper.is_bitwise_op():
-            if not e_manager.cpu.update_regs_n_flags(instruction, e_manager.extract_oper_value(-1)):
+            if not e_manager.handle_operation_cpu(e_manager.extract_oper_value(-1)):
                 jumpto(e_manager.ea)
                 break
 
@@ -61,7 +60,7 @@ def main(e_manager: EmulationManager = EmulationManager(here()), jump_count:int 
         elif e_manager.helper.is_cond_mov():
             if e_manager.cpu.eval_cond_mov(instruction.itype):
                 instruction.itype = ida_allins.NN_mov
-                e_manager.cpu.update_regs_n_flags(instruction,  e_manager.extract_oper_value(-1))
+                e_manager.handle_operation_cpu( e_manager.extract_oper_value(-1))
 
         elif e_manager.helper.is_non_cond_jump():
             exec_flow_shift_msg(instruction)
@@ -77,7 +76,7 @@ def main(e_manager: EmulationManager = EmulationManager(here()), jump_count:int 
         elif e_manager.helper.is_call_inst():
             print(f'[i] Called @{instruction.Op1.addr:x} from {instruction.ea:x}')
             if not e_manager.helper.are_skipped_instructions_junk():
-                e_manager.stack = e_manager.stack.create_called_frame(instruction.Op1.addr, e_manager.cpu.reg_bp, e_manager.cpu.reg_sp)
+                e_manager.stack = e_manager.stack.create_called_frame(instruction.Op1.addr, e_manager.cpu.reg_bp, e_manager.cpu.reg_sp, instruction.ea + instruction.size)
 
             if not e_manager.helper.handle_forward_movement():
                 print('[✕] Handle Forward Movement Failed! breaking the loop')
@@ -89,7 +88,7 @@ def main(e_manager: EmulationManager = EmulationManager(here()), jump_count:int 
             continue
 
         elif e_manager.helper.is_arithmetic_add():
-            op_value = e_manager.extract_oper_value(1)
+            op_value: int = e_manager.extract_oper_value(1)
             if e_manager.helper.validate_stack_ref():
                 reg_const: int = -1
                 match instruction.Op1.type:
@@ -105,19 +104,19 @@ def main(e_manager: EmulationManager = EmulationManager(here()), jump_count:int 
                 new_index = e_manager.cpu.gen_registers[reg_const].value + __INT__(instruction.Op1.addr).value
                 e_manager.handle_operation_stack(op_value, new_index)
 
-            if not e_manager.cpu.update_regs_n_flags(instruction, op_value):
+            if not e_manager.handle_operation_cpu(op_value):
                 jumpto(e_manager.ea)
                 break
 
         elif e_manager.helper.is_arithmetic_mul():
             oper_value = e_manager.extract_oper_value(-1)
-            e_manager.cpu.update_regs_n_flags(instruction, oper_value)
+            e_manager.handle_operation_cpu(oper_value)
 
         elif e_manager.helper.is_non_cond_mov():
             oper_value =  e_manager.extract_oper_value(-1)
             if not e_manager.helper.validate_stack_ref():
                 if instruction.Op1.type == ida_ua.o_reg:
-                    e_manager.cpu.update_regs_n_flags(instruction, oper_value)
+                    e_manager.handle_operation_cpu(oper_value)
 
             else:
                 e_manager.handle_operation_stack(e_manager.extract_oper_value(1), e_manager.helper.retrieve_stack_addr(e_manager.cpu, 0))

@@ -2,12 +2,9 @@ import ida_ua, ida_bytes, ida_allins
 from idaapi import ea_t, prev_head
 from  idc import BADADDR
 from idautils import DecodeInstruction, procregs
-from pygments.lexer import default
-
-from my_globals import SkippedDataState, __INT__, __OPER_COUNT__, __HEAP_REF__
+from my_globals import SkippedDataState, __INT__, __OPER_COUNT__
 from ida_xref import get_first_cref_to, get_next_cref_to
 from cpu import CpuContext
-from memory import StackFrame
 
 class InstructionHelper:
     def __init__(self, instruction: ida_ua.insn_t | None = None):
@@ -70,25 +67,12 @@ class InstructionHelper:
 
         return SkippedDataState.FINISHED_IS_JUNK, current_address
 
-    def contains_displ(self)->bool:
+    def contains_displ(self)->bool : return ida_ua.o_displ in self.operand_types
+    def contains_imm( self)->bool  : return ida_ua.o_imm  in self.operand_types
+    def contains_near(self)->bool  : return ida_ua.o_imm in self.operand_types
+    def contains_phrase(self)->bool: return ida_ua.o_phrase in self.operand_types
 
-        return ida_ua.o_displ in self.operand_types
-
-    def contains_imm( self)->bool:
-
-        return ida_ua.o_imm  in self.operand_types
-
-    def contains_near(self)->bool:
-
-        return ida_ua.o_imm in self.operand_types
-
-    def contains_phrase(self)->bool:
-
-        return ida_ua.o_phrase in self.operand_types
-
-    def contains_reg(self)->bool:
-
-        return ida_ua.o_reg  in self.operand_types
+    def contains_reg(self)->bool: return ida_ua.o_reg  in self.operand_types
 
     def get_operand_objects(self)->list[ida_ua.op_t]:
         for i in range(__OPER_COUNT__):
@@ -196,46 +180,17 @@ class InstructionHelper:
         self. operand_types = []
         self.validate_operands()
 
-    def get_oper_value(self, operand_index: int, context: CpuContext, stack: StackFrame)-> int | str | None:
-
-        try:
-            if -operand_index < len(self.operands) <= operand_index: raise IndexError
-            oper_t: ida_ua.op_t = self.operands[operand_index]
-            match oper_t.type:
-                case ida_ua.o_imm  : return oper_t.value
-                case ida_ua.o_reg  : return context.gen_registers[oper_t.reg].value
-                case ida_ua.o_displ:
-                    offset =  __INT__(oper_t.addr).value
-                    match oper_t.reg:
-                        case procregs.esp.reg: return stack.data[context.reg_sp + offset].data
-                        case procregs.ebp.reg: return stack.data[context.reg_bp + offset].data
-
-                    return __HEAP_REF__
-
-                case ida_ua.o_phrase:
-                    match oper_t.reg:
-                        case procregs.esp.reg: return stack.data[stack.top ].data
-                        case procregs.ebp.reg: return stack.data[stack.base].data
-
-                    return __HEAP_REF__
-
-        except IndexError:
-            exit(f'Error Code: 3\n@{self.inst.ea:x}InstructionHelper.get_oper_value encountered an IndexError, with calculated index: {operand_index:#x}')
-
     def retrieve_stack_addr(self, context: CpuContext, i: int)->int:
-        if not self.validate_stack_regs_op(): return 0
         match self.operand_types[i]:
-            case ida_ua.o_reg                    : return context.gen_registers[self.inst[i].reg].value
-            case ida_ua.o_phrase | ida_ua.o_displ: return context.gen_registers[self.inst[i].phrase].value + __INT__(self.inst[0].addr).value
+            case ida_ua.o_phrase | ida_ua.o_displ: return context.gen_registers[self.operands[i].phrase].value + __INT__(self.inst[0].addr).value
         return -1
 
-    def validate_stack_regs_op(self)->bool:
+    def validate_stack_ref(self)->bool:
         reg_const: int = -1
         match self.operand_types[0]:
-            case ida_ua.o_reg                    : reg_const = self.operands[0].reg
-            case ida_ua.o_phrase | ida_ua.o_displ: reg_const = self.operands[0].phrase
+            case ida_ua.o_phrase | ida_ua.o_displ: return self.operands[0].phrase in [procregs.esp.reg, procregs.ebp.reg]
             case default: return False
-        return reg_const in [procregs.esp.reg, procregs.ebp.reg]
+
 
     @staticmethod
     def is_in_ascii(candidate_value: int)->bool:

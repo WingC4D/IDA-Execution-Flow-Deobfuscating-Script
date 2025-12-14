@@ -1,7 +1,7 @@
 from memory     import StackFrame, StackData
 from cpu        import CpuContext
 from helpers    import InstructionHelper
-from my_globals import __INT__, DataTypes, REG_BYTES_SIZE
+from my_globals import __INT__, __UINT__, DataTypes, REG_BYTES_SIZE
 from idaapi     import ea_t
 from idautils   import procregs
 import ida_ua,  ida_allins
@@ -21,6 +21,9 @@ class EmulationManager:
         self.stack : StackFrame        = StackFrame(starting_point, self.cpu.reg_bp, self.cpu.reg_sp)
         self.helper: InstructionHelper = InstructionHelper()
         self.effective_address: ea_t   = starting_point
+
+    def __repr__(self):
+        return f'{self.cpu.__repr__()}\n{self.stack.__repr__()}'
 
     @property
     def ea(self)->ea_t:
@@ -68,83 +71,85 @@ class EmulationManager:
         except IndexError or NotImplementedError:
             exit(f'Error Code: 3\n@{self.helper.inst.ea:x}InstructionHelper.get_oper_value encountered an IndexError, with calculated index: {i:#x}')
 
-    def handle_operation_cpu(self, instruction: ida_ua.insn_t, oper_value: int | str | None = 1)->bool:
-        org_reg_value: int = self.gen_registers[instruction.Op1.reg].value
+    def handle_operation_cpu(self, oper_value: int | str | None = 1)->bool:
+        org_reg_value: int = self.cpu.gen_registers[self.helper.inst.Op1.reg].value
 
-        if instruction.itype == ida_allins.NN_mov:
-            if instruction.Op1.type == ida_ua.o_reg:
-                self.gen_registers[instruction.Op1.reg].value = oper_value
+        if self.helper.inst_type == ida_allins.NN_mov:
+            if self.helper.operand_types[0] == ida_ua.o_reg:
+                self.cpu.gen_registers[self.helper.operands[0].reg].value = oper_value
             print(self)
             return True
 
-        elif instruction in [ida_allins.NN_inc, ida_allins.NN_dec]:
-            org_carry = self.flags.carry
-            self.flags.reset()
-            self.flags.carry = org_carry
+        elif self.helper.inst_type in [ida_allins.NN_inc, ida_allins.NN_dec]:
+            org_carry = self.cpu.flags.carry
+            self.cpu.flags.reset()
+            self.cpu.flags.carry = org_carry
 
         else:
-            self.flags.reset()
+            self.cpu.flags.reset()
         result: int = -1
-        match instruction.itype:
+        match self.helper.inst_type:
             case ida_allins.NN_add:
-                self.gen_registers[instruction.Op1.reg].value += oper_value
-                self.flags.set_carry_add(self.gen_registers[instruction.Op1.reg].value, org_reg_value)
-                self.flags.set_overflow_add(self.gen_registers[instruction.Op1.reg].value, org_reg_value, oper_value)
+                self.cpu.gen_registers[self.helper.operands[0].reg].value += oper_value
+                self.cpu.flags.set_carry_add(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value)
+                self.cpu.flags.set_overflow_add(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value, oper_value)
 
             case ida_allins.NN_and:
-                self.gen_registers[instruction.Op1.reg].value &= oper_value
+                self.cpu.gen_registers[self.helper.operands[0].reg].value &= oper_value
 
             case ida_allins.NN_cmp:
-                result = __UINT__(self.gen_registers[instruction.Op1.reg].value - oper_value).value
-                self.flags.set_carry_sub(result, org_reg_value)
-                self.flags.set_overflow_sub(result, org_reg_value, oper_value)
+                result = __UINT__(self.cpu.gen_registers[self.helper.operands[0].reg].value - oper_value).value
+                self.cpu.flags.set_carry_sub(result, org_reg_value)
+                self.cpu.flags.set_overflow_sub(result, org_reg_value, oper_value)
 
             case ida_allins.NN_dec:
-                self.gen_registers[instruction.Op1.reg].value -= 1
-                self.flags.set_overflow_sub(self.gen_registers[instruction.Op1.reg].value, org_reg_value, 1)
+                self.cpu.gen_registers[self.helper.operands[0].reg].value -= 1
+                self.cpu.flags.set_overflow_sub(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value, 1)
 
             case ida_allins.NN_imul:
-                self.flags.reset()
-                left_value : int = __INT__(self.gen_registers[instruction.Op1.reg].value).value
+                self.cpu.flags.reset()
+                left_value : int = __INT__(self.cpu.gen_registers[self.helper.operands[0].reg].value).value
                 right_value: int = __INT__(oper_value).value
                 print(f"[i] iMultiplying {left_value:#x} by {right_value:#x}")
-                self.gen_registers[instruction.Op1.reg].value = left_value * right_value
-                self.flags.set_overflow_imul(__INT__(org_reg_value).value, __INT__(oper_value).value)
+                self.cpu.gen_registers[self.helper.operands[0].reg].value = left_value * right_value
+                self.cpu.flags.set_overflow_imul(__INT__(org_reg_value).value, __INT__(oper_value).value)
 
             case ida_allins.NN_inc:
-                self.gen_registers[instruction.Op1.reg].value += 1
-                self.flags.set_overflow_add(self.gen_registers[instruction.Op1.reg].value, org_reg_value, 1)
+                self.cpu.gen_registers[self.helper.operands[0].reg].value += 1
+                self.cpu.flags.set_overflow_add(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value, 1)
 
             case ida_allins.NN_not:
-                self.gen_registers[instruction.Op1.reg].value = ~self.gen_registers[instruction.Op1.reg].value
+                self.cpu.gen_registers[self.helper.operands[0].reg].value = ~self.cpu.gen_registers[self.helper.inst.Op1.reg].value
 
             case ida_allins.NN_or:
-                self.gen_registers[instruction.Op1.reg].value |= oper_value
+                self.cpu.gen_registers[self.helper.operands[0].reg].value |= oper_value
 
             case ida_allins.NN_sub:
-                self.gen_registers[instruction.Op1.reg].value -= oper_value
-                result = self.gen_registers[instruction.Op1.reg].value
-                self.flags.set_carry_sub(self.gen_registers[instruction[0].reg].value, org_reg_value)
-                self.flags.set_overflow_sub(self.gen_registers[instruction[0].reg].value, org_reg_value, oper_value)
-                if org_reg_value - oper_value < 0:
-                    self.gen_registers[instruction[0].reg].value = 0
+                self.cpu.gen_registers[self.helper.operands[0].reg].value -= oper_value
+                result = self.cpu.gen_registers[self.helper.operands[0].reg].value
+                self.cpu.flags.set_carry_sub(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value)
+                self.cpu.flags.set_overflow_sub(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value, oper_value)
+                """if org_reg_value - oper_value < 0:
+                    self.cpu.gen_registers[self.helper.operands[0].reg].value = 0"""
 
             case ida_allins.NN_test:
-                result = self.gen_registers[instruction.Op1.reg].value & oper_value
+                result = self.cpu.gen_registers[self.helper.operands[0].reg].value & oper_value
 
             case ida_allins.NN_xor:
-                self.gen_registers[instruction.Op1.reg].value ^= oper_value
+                self.cpu.gen_registers[self.helper.operands[0].reg].value ^= oper_value
 
             case default:
-                print(f'Unhandled mnemonic of const {hex(instruction.itype)} @{instruction.ea:x}')
+                print(f'Unhandled mnemonic of const {hex(self.helper.inst_type)} @{self.ea:x}')
                 return False
 
-        if not instruction.itype == ida_allins.NN_sub:
-            result = self.gen_registers[instruction.Op1.reg].value
-
-        self.flags.update(result)
+        if not self.helper.inst_type == ida_allins.NN_sub:
+            result = self.cpu.gen_registers[self.helper.operands[0].reg].value
+        self.stack.top = self.cpu.reg_sp
+        self.stack.base = self.cpu.reg_bp
+        self.cpu.flags.update(result)
         print(self.__repr__())
         return True
+
 
     def handle_operation_stack(self, oper_value: int, new_index: int | None = None)->int:
         """This method handles the "StackFrame" class' data members when a PUSH or a POP operation is identified.\n
@@ -165,7 +170,7 @@ class EmulationManager:
                             if new_index == self.stk_last_referenced_data.addr + self.stk_last_referenced_data.size:
                                 self.stk_strcat(chr(oper_value), size)
                                 self.stk_last_referenced_data.type = DataTypes.STRING
-                                print(self)
+                                print(self.__repr__())
                                 return oper_value
                         oper_value            = chr(oper_value)
                         dt_type               = DataTypes.CHAR
@@ -175,7 +180,7 @@ class EmulationManager:
                         if size & 3:
                             if self.stk_last_referenced_data.is_string():
                                 self.stk_last_referenced_data.size += size
-                                print(self)
+                                print(self.__repr__())
                                 return oper_value
 
                     self.stack.last_index = new_index
@@ -195,7 +200,7 @@ class EmulationManager:
 
                 case ida_allins.NN_pop:
                     popped_stack_data: StackData = self.stack.data.pop(self.stack.top_stored_var)
-
+                    self.cpu.reg_sp             += 4
                     self.stack.top              += 4
                     self.stack.last_index        = self.stack.top
                     self.stack.top_stored_var    = self.stack.top
@@ -217,7 +222,7 @@ class EmulationManager:
 
                 case default: raise NotImplementedError
             self.stack.top_stored_var = self.stack.top
-            print(self)
+            print(self.__repr__())
             return self.stack.last_index
 
         except NotImplementedError:

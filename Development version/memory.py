@@ -1,7 +1,6 @@
-import  ida_ua, ida_allins
-from my_globals import DataTypes, __INT__
+from my_globals import DataTypes,REG_BYTES_SIZE, MAX_REG_VALUE
 from idaapi import ea_t
-from idautils import procregs
+
 
 class Data:
     def __init__(self,
@@ -52,22 +51,21 @@ class StackFrame:
                  start_address: ea_t,
                  base_addr    : ea_t,
                  top_addr     : ea_t,
+                 return_addr  : ea_t          = MAX_REG_VALUE,
                  calling_frame: object | None = None,
                  depth        : int           = 0)->None:
 
         self.start_addr     : ea_t                 = start_address
         self.base           : ea_t                 = base_addr
         self.top            : ea_t                 = top_addr
-        self.data           : dict[int, StackData] = {}
+        self.ret_addr       : ea_t                 = return_addr
+        self.data           : dict[int, StackData] = {base_addr: StackData(data=return_addr, address=top_addr, base_offset = top_addr - base_addr, size=REG_BYTES_SIZE, dt_type=DataTypes.DWORD)}
         self.last_index     : int                  = base_addr
         self.prev_frame     : StackFrame | None    = calling_frame
         self.next_frame     : StackFrame | None    = None
         self.depth          : int                  = depth
         self.top_stored_var : int                  = top_addr
         self.longest_str_len: int                  = 8
-
-
-
 
     def __repr__(self)->str:
         data_addresses: list[int]       = [data_addr for  data_addr, data_obj in self.data.items()]
@@ -79,7 +77,7 @@ class StackFrame:
 {'\t' * self.depth}Current Top Address : {format(self.top, '#10x')}
 {'\t' * self.depth}Stack Depth: {self.depth}
 {'\t' * self.depth}Stack Data:{"{"}
-{str('\t' + '\t' * self.depth)}{(str('\t' + '\t' * self.depth)).join([self.data[int(addr)].__repr__(max_length=self.longest_str_len) for addr in data_addresses if self.base >= addr >= self.top])}
+{str('\t' + '\t' * self.depth)}{(str('\t' + '\t' * self.depth)).join([self.data[int(addr)].__repr__(max_length=self.longest_str_len) for addr in data_addresses if self.base >= addr >= self.top]).rstrip('\n')}
 {'\t' * self.depth + '}'}"""
 
 
@@ -94,18 +92,18 @@ class StackFrame:
         self.addresses.sort()
         for address in self.addresses:
             if self.base>= address >= self.top: return address
-            
+
         return -1
 
     def add_data(self, stack_data: StackData)->None:
         if stack_data.addr < self.top:
-            print(f'[!] Appended outside the frame!')
+            print(f'[!] Appended outside the frame! addr: {stack_data.addr:#x}')
 
         self.data[stack_data.addr] = stack_data
 
 
 
-    def create_called_frame(self, start_address: ea_t, base_pointer, stack_pointer):
-        self.next_frame: StackFrame = StackFrame(start_address,base_pointer, stack_pointer,  self, self.depth + 1)
+    def create_called_frame(self, start_address: ea_t, base_pointer, stack_pointer, ret_addr):
+        self.next_frame: StackFrame = StackFrame(start_address,base_pointer, stack_pointer, ret_addr,self, self.depth + 1)
 
         return self.next_frame

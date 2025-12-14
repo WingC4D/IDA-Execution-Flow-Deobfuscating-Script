@@ -790,7 +790,6 @@ class EmulationManager:
         if self.stk_last_referenced_data.is_char()    : self.stk_last_referenced_data.type = DataTypes.STRING
         if len(self.stk_last_referenced_data.data) > 8: self.stack.longest_str_len         = len(self.stk_last_referenced_data.data)
 
-
 def main(e_manager: EmulationManager = EmulationManager(here()), jump_count:int = 0)->int:
     eval_start: ea_t = e_manager.ea
     instruction: ida_ua.insn_t

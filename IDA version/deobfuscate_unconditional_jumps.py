@@ -9,7 +9,7 @@ import ida_allins, ida_bytes, ida_auto, ida_ua
 __16bit__      : bool      = inf_is_16bit()
 __32bit__      : bool      = inf_is_32bit_exactly()
 __64bit__      : bool      = inf_is_64bit()
-__JUMP_LIMIT__ : int       = 0x5
+__JUMP_LIMIT__ : int       = 0x9
 __OPER_COUNT__ : int       = 0x8
 
 try:
@@ -112,22 +112,21 @@ class StackFrame:
                  start_address: ea_t,
                  base_addr    : ea_t,
                  top_addr     : ea_t,
+                 return_addr  : ea_t          = MAX_REG_VALUE,
                  calling_frame: object | None = None,
                  depth        : int           = 0)->None:
 
         self.start_addr     : ea_t                 = start_address
         self.base           : ea_t                 = base_addr
         self.top            : ea_t                 = top_addr
-        self.data           : dict[int, StackData] = {}
+        self.ret_addr       : ea_t                 = return_addr
+        self.data           : dict[int, StackData] = {base_addr: StackData(data=return_addr, address=top_addr, base_offset = top_addr - base_addr, size=REG_BYTES_SIZE, dt_type=DataTypes.DWORD)}
         self.last_index     : int                  = base_addr
         self.prev_frame     : StackFrame | None    = calling_frame
         self.next_frame     : StackFrame | None    = None
         self.depth          : int                  = depth
         self.top_stored_var : int                  = top_addr
         self.longest_str_len: int                  = 8
-
-
-
 
     def __repr__(self)->str:
         data_addresses: list[int]       = [data_addr for  data_addr, data_obj in self.data.items()]
@@ -165,8 +164,8 @@ class StackFrame:
 
 
 
-    def create_called_frame(self, start_address: ea_t, base_pointer, stack_pointer):
-        self.next_frame: StackFrame = StackFrame(start_address,base_pointer, stack_pointer,  self, self.depth + 1)
+    def create_called_frame(self, start_address: ea_t, base_pointer, stack_pointer, ret_addr):
+        self.next_frame: StackFrame = StackFrame(start_address,base_pointer, stack_pointer, ret_addr,self, self.depth + 1)
 
         return self.next_frame
 
@@ -686,8 +685,8 @@ class EmulationManager:
                 result = self.cpu.gen_registers[self.helper.operands[0].reg].value
                 self.cpu.flags.set_carry_sub(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value)
                 self.cpu.flags.set_overflow_sub(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value, oper_value)
-                if org_reg_value - oper_value < 0:
-                    self.cpu.gen_registers[self.helper.operands[0].reg].value = 0
+                """if org_reg_value - oper_value < 0:
+                    self.cpu.gen_registers[self.helper.operands[0].reg].value = 0"""
 
             case ida_allins.NN_test:
                 result = self.cpu.gen_registers[self.helper.operands[0].reg].value & oper_value
@@ -863,7 +862,7 @@ def main(e_manager: EmulationManager = EmulationManager(here()), jump_count:int 
         elif e_manager.helper.is_call_inst():
             print(f'[i] Called @{instruction.Op1.addr:x} from {instruction.ea:x}')
             if not e_manager.helper.are_skipped_instructions_junk():
-                e_manager.stack = e_manager.stack.create_called_frame(instruction.Op1.addr, e_manager.cpu.reg_bp, e_manager.cpu.reg_sp)
+                e_manager.stack = e_manager.stack.create_called_frame(instruction.Op1.addr, e_manager.cpu.reg_bp, e_manager.cpu.reg_sp, instruction.ea + instruction.size)
 
             if not e_manager.helper.handle_forward_movement():
                 print('[✕] Handle Forward Movement Failed! breaking the loop')

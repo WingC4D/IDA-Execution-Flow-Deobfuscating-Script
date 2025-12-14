@@ -139,7 +139,7 @@ class StackFrame:
 {'\t' * self.depth}Current Top Address : {format(self.top, '#10x')}
 {'\t' * self.depth}Stack Depth: {self.depth}
 {'\t' * self.depth}Stack Data:{"{"}
-{str('\t' + '\t' * self.depth)}{(str('\t' + '\t' * self.depth)).join([self.data[int(addr)].__repr__(max_length=self.longest_str_len) for addr in data_addresses if self.base >= addr >= self.top])}
+{str('\t' + '\t' * self.depth)}{(str('\t' + '\t' * self.depth)).join([self.data[int(addr)].__repr__(max_length=self.longest_str_len) for addr in data_addresses if self.base >= addr >= self.top]).rstrip('\n')}
 {'\t' * self.depth + '}'}"""
 
 

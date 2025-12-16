@@ -313,29 +313,23 @@ class CpuContext:
     @property
     def reg_si(self)->int: return self.registers[procregs.esi.reg].value & __16bMSK__
     @reg_ax.setter
-    def reg_ax(self, value: int)->None:
-        self.registers[procregs.eax.reg] = (value + (self.registers[procregs.eax.reg].value ^
-                                                    (self.registers[procregs.eax.reg].value & __16bMSK__)))
+    def reg_ax(self, value: int)->None: self.registers[procregs.eax.reg] = (value + (self.registers[procregs.eax.reg].value ^
+                                                                                    (self.registers[procregs.eax.reg].value & __16bMSK__)))
     @reg_bx.setter
-    def reg_bx(self, value: int)->None:
-        self.registers[procregs.ebx.reg] = (value + (self.registers[procregs.ebx.reg].value ^
-                                                    (self.registers[procregs.ebx.reg].value & __16bMSK__)))
+    def reg_bx(self, value: int)->None: self.registers[procregs.ebx.reg] = (value + (self.registers[procregs.ebx.reg].value ^
+                                                                                    (self.registers[procregs.ebx.reg].value & __16bMSK__)))
     @reg_cx.setter
-    def reg_cx(self, value: int)->None:
-        self.registers[procregs.ecx.reg] = (value + (self.registers[procregs.ecx.reg].value ^
-                                                    (self.registers[procregs.ecx.reg].value & __16bMSK__)))
+    def reg_cx(self, value: int)->None: self.registers[procregs.ecx.reg] = (value + (self.registers[procregs.ecx.reg].value ^
+                                                                                    (self.registers[procregs.ecx.reg].value & __16bMSK__)))
     @reg_dx.setter
-    def reg_dx(self, value: int)->None:
-        self.registers[procregs.edx.reg] = (value + (self.registers[procregs.edx.reg].value ^
+    def reg_dx(self, value: int)->None: self.registers[procregs.edx.reg] = (value + (self.registers[procregs.edx.reg].value ^
                                                     (self.registers[procregs.edx.reg].value & __16bMSK__)))
     @reg_di.setter
-    def reg_di(self, value: int)->None:
-        self.registers[procregs.edi.reg] = (value + (self.registers[procregs.edi.reg].value ^
-                                                    (self.registers[procregs.edi.reg].value & __16bMSK__)))
+    def reg_di(self, value: int)->None: self.registers[procregs.edi.reg] = (value + (self.registers[procregs.edi.reg].value ^
+                                                                                    (self.registers[procregs.edi.reg].value & __16bMSK__)))
     @reg_si.setter
-    def reg_si(self, value: int)->None :
-        self.registers[procregs.esi.reg] = (value + (self.registers[procregs.esi.reg].value ^
-                                                    (self.registers[procregs.esi.reg].value & __16bMSK__)))
+    def reg_si(self, value: int)->None: self.registers[procregs.esi.reg] = (value + (self.registers[procregs.esi.reg].value ^
+                                                                                    (self.registers[procregs.esi.reg].value & __16bMSK__)))
     @property
     def reg_eax(self)->int: return self.registers[procregs.eax.reg].value
     @property

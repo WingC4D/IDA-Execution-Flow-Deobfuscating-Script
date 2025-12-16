@@ -43,6 +43,9 @@ try:
 
     else: raise RuntimeError
 
+    __16bMSK__ = 0xFFFF
+    __32bMSK__ = 0xFFFFFFFF
+
 except RuntimeError: exit("couldn't identify the bit-ness of the file")
 
 __HEAP_REF__: int = MAX_REG_VALUE + 1
@@ -53,15 +56,27 @@ class SkippedDataState(Enum):
     NOT_FINISHED_IS_CODE = 2
 
 class DataTypes(Enum):
+    PVOID   = 0x0
     BYTE    = 0x1
     WORD    = 0x2
     DWORD   = 0x4
     QWORD   = 0x8
-    POINTER = 0xC
-    CHAR    = 0x10
-    STRING  = 0x20
-    TEB     = 0x100
-    PEB     = 0x200
+    POINTER = 0x10
+    CHAR    = 0x20
+    WCHAR   = 0x40
+    STRING  = 0x80
+    WSTRING = 0x100
+    TEB     = 0x200
+    PEB     = 0x400
+    PTEB    = 0x210
+    PPEB    = 0x410
+
+    if __16bit__:
+        NATIVE_TYPE = WORD
+    elif __32bit__:
+        NATIVE_TYPE = DWORD
+    elif __64bit__:
+        NATIVE_TYPE = QWORD
 
 class Data:
     def __init__(self,
@@ -120,7 +135,7 @@ class StackFrame:
         self.base           : ea_t                 = base_addr
         self.top            : ea_t                 = top_addr
         self.ret_addr       : ea_t                 = return_addr
-        self.data           : dict[int, StackData] = {base_addr: StackData(data=return_addr, address=top_addr, base_offset = top_addr - base_addr, size=REG_BYTES_SIZE, dt_type=DataTypes.DWORD)}
+        self.data           : dict[int, StackData] = {base_addr: StackData(return_addr, top_addr, REG_BYTES_SIZE, top_addr - base_addr, DataTypes.NATIVE_TYPE)}
         self.last_index     : int                  = base_addr
         self.prev_frame     : StackFrame | None    = calling_frame
         self.next_frame     : StackFrame | None    = None
@@ -257,7 +272,8 @@ class CpuContext:
     def __init__(self):
         try:
             if __32bit__:
-                self.gen_registers: dict = {
+                self.registers: dict = {
+                # General Registers
                     procregs.eax.reg: __UINT__(0),
                     procregs.ebx.reg: __UINT__(0),
                     procregs.ecx.reg: __UINT__(0),
@@ -268,65 +284,96 @@ class CpuContext:
                     procregs.esp.reg: __UINT__(0x100000),
                     procregs.eip.reg: __UINT__(0)
                 }
-
-            else:
-                raise NotImplementedError
+            else: raise NotImplementedError
+            # Segment Registers
+            self.registers[procregs.cs.reg] = __UINT__(0)
+            self.registers[procregs.ds.reg] = __UINT__(0)
+            self.registers[procregs.es.reg] = __UINT__(0)
+            self.registers[procregs.fs.reg] = {
+                0x0 : "SEH List",
+                0x18: DataTypes.PTEB,
+                0x30: DataTypes.PPEB
+            }
+            procregs.gs.reg = __UINT__(0)
 
         except NotImplementedError:
             exit(f"Currently only handles 32bit processors")
-        self.seg_registers: dict = {
-            procregs.cs.reg: __UINT__()
 
-        }
         self.flags: FlagsContext = FlagsContext()
-
     @property
-    def reg_ax(self): return self.gen_registers[procregs.eax.reg].value
-
+    def reg_ax(self)->int: return self.registers[procregs.eax.reg].value & __16bMSK__
     @property
-    def reg_bx(self): return self.gen_registers[procregs.ebx.reg].value
-
+    def reg_bx(self)->int: return self.registers[procregs.ebx.reg].value & __16bMSK__
     @property
-    def reg_cx(self): return self.gen_registers[procregs.ecx.reg].value
-
+    def reg_cx(self)->int: return self.registers[procregs.ecx.reg].value & __16bMSK__
     @property
-    def reg_dx(self): return self.gen_registers[procregs.edx.reg].value
-
+    def reg_dx(self)->int: return self.registers[procregs.edx.reg].value & __16bMSK__
     @property
-    def reg_di(self): return self.gen_registers[procregs.edi.reg].value
-
+    def reg_di(self)->int: return self.registers[procregs.edi.reg].value & __16bMSK__
     @property
-    def reg_si(self): return self.gen_registers[procregs.esi.reg].value
-
+    def reg_si(self)->int: return self.registers[procregs.esi.reg].value & __16bMSK__
+    @reg_ax.setter
+    def reg_ax(self, value: int)->None:
+        self.registers[procregs.eax.reg] = (value + (self.registers[procregs.eax.reg].value ^
+                                                    (self.registers[procregs.eax.reg].value & __16bMSK__)))
+    @reg_bx.setter
+    def reg_bx(self, value: int)->None:
+        self.registers[procregs.ebx.reg] = (value + (self.registers[procregs.ebx.reg].value ^
+                                                    (self.registers[procregs.ebx.reg].value & __16bMSK__)))
+    @reg_cx.setter
+    def reg_cx(self, value: int)->None:
+        self.registers[procregs.ecx.reg] = (value + (self.registers[procregs.ecx.reg].value ^
+                                                    (self.registers[procregs.ecx.reg].value & __16bMSK__)))
+    @reg_dx.setter
+    def reg_dx(self, value: int)->None:
+        self.registers[procregs.edx.reg] = (value + (self.registers[procregs.edx.reg].value ^
+                                                    (self.registers[procregs.edx.reg].value & __16bMSK__)))
+    @reg_di.setter
+    def reg_di(self, value: int)->None:
+        self.registers[procregs.edi.reg] = (value + (self.registers[procregs.edi.reg].value ^
+                                                    (self.registers[procregs.edi.reg].value & __16bMSK__)))
+    @reg_si.setter
+    def reg_si(self, value: int)->None :
+        self.registers[procregs.esi.reg] = (value + (self.registers[procregs.esi.reg].value ^
+                                                    (self.registers[procregs.esi.reg].value & __16bMSK__)))
     @property
-    def reg_bp(self): return self.gen_registers[procregs.ebp.reg].value
-
-    @reg_bp.setter
-    def reg_bp(self,  value: int)->None:
-        self.reg_bp = value
-        return
+    def reg_eax(self)->int: return self.registers[procregs.eax.reg].value
     @property
-    def reg_sp(self)->int: return self.gen_registers[procregs.esp.reg].value
-
-    @reg_sp.setter
-    def reg_sp(self,  value: int)->None:
-        self.gen_registers[procregs.esp.reg].value = value
-        return
-
+    def reg_ebx(self)->int: return self.registers[procregs.ebx.reg].value
     @property
-    def reg_ip(self): return self.gen_registers[procregs.eip.reg].value
+    def reg_ecx(self)->int: return self.registers[procregs.ecx.reg].value
+    @property
+    def reg_edx(self)->int: return self.registers[procregs.edx.reg].value
+    @property
+    def reg_edi(self)->int: return self.registers[procregs.edi.reg].value
+    @property
+    def reg_esi(self)->int: return self.registers[procregs.esi.reg].value
+    @property
+    def reg_ebp(self)->int: return self.registers[procregs.ebp.reg].value
+    @property
+    def reg_esp(self)->int: return self.registers[procregs.esp.reg].value
+    @property
+    def reg_eip(self)->int: return self.registers[procregs.eip.reg].value
+    @reg_ebp.setter
+    def reg_ebp(self, value: int)->None: self.registers[procregs.ebp.reg].valu = value
+    @reg_esp.setter
+    def reg_esp(self, value: int)->None: self.registers[procregs.esp.reg].value = value
+    @reg_eip.setter
+    def reg_eip(self, value: int)->None: self.registers[procregs.eip.reg].value = value
 
     def __repr__(self)->str: return f"""CPU Context:
-- Architecture: {__sBITS__}bit Intel || AMD\n\n- Integer Registers:\n\tReg_AX: {hex(self.reg_ax)}
-\tReg_BX: {hex(self.reg_bx)}
-\tReg_CX: {hex(self.reg_cx)}
-\tReg_DX: {hex(self.reg_dx)}
-\tReg_DI: {hex(self.reg_di)}
-\tReg_SI: {hex(self.reg_si)}
-\tReg_BP: {hex(self.reg_bp)}
-\tReg_SP: {hex(self.reg_sp)}
-\tReg_IP: {hex(self.reg_ip)}
-    
+- Architecture: {__sBITS__}bit Intel || AMD
+- Integer Registers:
+\tReg_AX: {hex(self.reg_eax)}
+\tReg_BX: {hex(self.reg_ebx)}
+\tReg_CX: {hex(self.reg_ecx)}
+\tReg_DX: {hex(self.reg_edx)}
+\tReg_DI: {hex(self.reg_edi)}
+\tReg_SI: {hex(self.reg_esi)}
+\tReg_BP: {hex(self.reg_ebp)}
+\tReg_SP: {hex(self.reg_esp)}
+\tReg_IP: {hex(self.reg_eip)}
+
 - {self.flags}\n"""
 
     def eval_cond_jump(self, instruction_type: int)->bool:
@@ -336,9 +383,9 @@ class CpuContext:
             case ida_allins.NN_jl   : return self.flags.sign != self.flags.overflow
             case ida_allins.NN_jno  : return not self.flags.overflow
             case ida_allins.NN_jns  : return not self.flags.sign
-            case ida_allins.NN_jcxz : return not self.reg_cx & 0xFFFF
-            case ida_allins.NN_jecxz: return not self.reg_cx & 0xFFFFFFFF
-            case ida_allins.NN_jrcxz: return not self.reg_cx & 0xFFFFFFFFFFFFFFFF
+            case ida_allins.NN_jcxz : return not self.reg_ecx & 0xFFFF
+            case ida_allins.NN_jecxz: return not self.reg_ecx & 0xFFFFFFFF
+            case ida_allins.NN_jrcxz: return not self.reg_ecx & 0xFFFFFFFFFFFFFFFF
             case ida_allins.NN_jp   | ida_allins.NN_jpe : return self.flags.parity
             case ida_allins.NN_jbe  | ida_allins.NN_jna : return self.flags.carry or self.flags.zero
             case ida_allins.NN_jge  | ida_allins.NN_jnl : return self.flags.sign == self.flags.overflow
@@ -433,12 +480,11 @@ class InstructionHelper:
 
         return SkippedDataState.FINISHED_IS_JUNK, current_address
 
-    def contains_displ(self)->bool : return ida_ua.o_displ in self.operand_types
-    def contains_imm( self)->bool  : return ida_ua.o_imm  in self.operand_types
-    def contains_near(self)->bool  : return ida_ua.o_imm in self.operand_types
+    def contains_displ(self)->bool : return ida_ua.o_displ  in self.operand_types
+    def contains_imm( self)->bool  : return ida_ua.o_imm    in self.operand_types
+    def contains_near(self)->bool  : return ida_ua.o_near   in self.operand_types
     def contains_phrase(self)->bool: return ida_ua.o_phrase in self.operand_types
-
-    def contains_reg(self)->bool: return ida_ua.o_reg  in self.operand_types
+    def contains_reg(self)->bool   : return ida_ua.o_reg    in self.operand_types
 
     def get_operand_objects(self)->list[ida_ua.op_t]:
         for i in range(__OPER_COUNT__):
@@ -548,7 +594,7 @@ class InstructionHelper:
 
     def retrieve_stack_addr(self, context: CpuContext, i: int)->int:
         match self.operand_types[i]:
-            case ida_ua.o_phrase | ida_ua.o_displ: return context.gen_registers[self.operands[i].phrase].value + __INT__(self.inst[0].addr).value
+            case ida_ua.o_phrase | ida_ua.o_displ: return context.registers[self.operands[i].phrase].value + __INT__(self.inst[0].addr).value
         return -1
 
     def validate_stack_ref(self)->bool:
@@ -574,7 +620,7 @@ class EmulationManager:
             starting_point: ea_t -
         """
         self.cpu   : CpuContext        = CpuContext()
-        self.stack : StackFrame        = StackFrame(starting_point, self.cpu.reg_bp, self.cpu.reg_sp)
+        self.stack : StackFrame        = StackFrame(starting_point, self.cpu.reg_ebp, self.cpu.reg_esp)
         self.helper: InstructionHelper = InstructionHelper()
         self.effective_address: ea_t   = starting_point
 
@@ -608,18 +654,18 @@ class EmulationManager:
             oper_t: ida_ua.op_t = self.helper.operands[i]
             match oper_t.type:
                 case ida_ua.o_imm                    : return oper_t.value
-                case ida_ua.o_reg                    : return self.cpu.gen_registers[oper_t.reg].value
+                case ida_ua.o_reg                    : return self.cpu.registers[oper_t.reg].value
                 case ida_ua.o_displ | ida_ua.o_phrase:
                     if oper_t.type == ida_ua.o_phrase: raise NotImplementedError
                     offset    : int =  __INT__(oper_t.addr).value
                     stack_addr: int = -1
                     match oper_t.phrase:
-                        case procregs.esp.reg: stack_addr = self.cpu.reg_sp + offset
-                        case procregs.ebp.reg: stack_addr = self.cpu.reg_bp + offset
+                        case procregs.esp.reg: stack_addr = self.cpu.reg_esp + offset
+                        case procregs.ebp.reg: stack_addr = self.cpu.reg_ebp + offset
 
                     stack_data: StackData | None = self.stack.data[stack_addr]
                     if not isinstance(stack_data, StackData): raise  NotImplementedError
-                    if not isinstance(stack_data.data, int) : return self.stack.data[self.cpu.reg_bp + offset].addr
+                    if not isinstance(stack_data.data, int) : return self.stack.data[self.cpu.reg_ebp + offset].addr
                     else                                    : return stack_data.data
 
             raise NotImplementedError
@@ -628,11 +674,11 @@ class EmulationManager:
             exit(f'Error Code: 3\n@{self.helper.inst.ea:x}InstructionHelper.get_oper_value encountered an IndexError, with calculated index: {i:#x}')
 
     def handle_operation_cpu(self, oper_value: int | str | None = 1)->bool:
-        org_reg_value: int = self.cpu.gen_registers[self.helper.inst.Op1.reg].value
+        org_reg_value: int = self.cpu.registers[self.helper.inst.Op1.reg].value
 
         if self.helper.inst_type == ida_allins.NN_mov:
             if self.helper.operand_types[0] == ida_ua.o_reg:
-                self.cpu.gen_registers[self.helper.operands[0].reg].value = oper_value
+                self.cpu.registers[self.helper.operands[0].reg].value = oper_value
             print(self)
             return True
 
@@ -646,62 +692,62 @@ class EmulationManager:
         result: int = -1
         match self.helper.inst_type:
             case ida_allins.NN_add:
-                self.cpu.gen_registers[self.helper.operands[0].reg].value += oper_value
-                self.cpu.flags.set_carry_add(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value)
-                self.cpu.flags.set_overflow_add(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value, oper_value)
+                self.cpu.registers[self.helper.operands[0].reg].value += oper_value
+                self.cpu.flags.set_carry_add(self.cpu.registers[self.helper.operands[0].reg].value, org_reg_value)
+                self.cpu.flags.set_overflow_add(self.cpu.registers[self.helper.operands[0].reg].value, org_reg_value, oper_value)
 
             case ida_allins.NN_and:
-                self.cpu.gen_registers[self.helper.operands[0].reg].value &= oper_value
+                self.cpu.registers[self.helper.operands[0].reg].value &= oper_value
 
             case ida_allins.NN_cmp:
-                result = __UINT__(self.cpu.gen_registers[self.helper.operands[0].reg].value - oper_value).value
+                result = __UINT__(self.cpu.registers[self.helper.operands[0].reg].value - oper_value).value
                 self.cpu.flags.set_carry_sub(result, org_reg_value)
                 self.cpu.flags.set_overflow_sub(result, org_reg_value, oper_value)
 
             case ida_allins.NN_dec:
-                self.cpu.gen_registers[self.helper.operands[0].reg].value -= 1
-                self.cpu.flags.set_overflow_sub(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value, 1)
+                self.cpu.registers[self.helper.operands[0].reg].value -= 1
+                self.cpu.flags.set_overflow_sub(self.cpu.registers[self.helper.operands[0].reg].value, org_reg_value, 1)
 
             case ida_allins.NN_imul:
                 self.cpu.flags.reset()
-                left_value : int = __INT__(self.cpu.gen_registers[self.helper.operands[0].reg].value).value
+                left_value : int = __INT__(self.cpu.registers[self.helper.operands[0].reg].value).value
                 right_value: int = __INT__(oper_value).value
                 print(f"[i] iMultiplying {left_value:#x} by {right_value:#x}")
-                self.cpu.gen_registers[self.helper.operands[0].reg].value = left_value * right_value
+                self.cpu.registers[self.helper.operands[0].reg].value = left_value * right_value
                 self.cpu.flags.set_overflow_imul(__INT__(org_reg_value).value, __INT__(oper_value).value)
 
             case ida_allins.NN_inc:
-                self.cpu.gen_registers[self.helper.operands[0].reg].value += 1
-                self.cpu.flags.set_overflow_add(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value, 1)
+                self.cpu.registers[self.helper.operands[0].reg].value += 1
+                self.cpu.flags.set_overflow_add(self.cpu.registers[self.helper.operands[0].reg].value, org_reg_value, 1)
 
             case ida_allins.NN_not:
-                self.cpu.gen_registers[self.helper.operands[0].reg].value = ~self.cpu.gen_registers[self.helper.inst.Op1.reg].value
+                self.cpu.registers[self.helper.operands[0].reg].value = ~self.cpu.registers[self.helper.inst.Op1.reg].value
 
             case ida_allins.NN_or:
-                self.cpu.gen_registers[self.helper.operands[0].reg].value |= oper_value
+                self.cpu.registers[self.helper.operands[0].reg].value |= oper_value
 
             case ida_allins.NN_sub:
-                self.cpu.gen_registers[self.helper.operands[0].reg].value -= oper_value
-                result = self.cpu.gen_registers[self.helper.operands[0].reg].value
-                self.cpu.flags.set_carry_sub(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value)
-                self.cpu.flags.set_overflow_sub(self.cpu.gen_registers[self.helper.operands[0].reg].value, org_reg_value, oper_value)
+                self.cpu.registers[self.helper.operands[0].reg].value -= oper_value
+                result = self.cpu.registers[self.helper.operands[0].reg].value
+                self.cpu.flags.set_carry_sub(self.cpu.registers[self.helper.operands[0].reg].value, org_reg_value)
+                self.cpu.flags.set_overflow_sub(self.cpu.registers[self.helper.operands[0].reg].value, org_reg_value, oper_value)
                 """if org_reg_value - oper_value < 0:
                     self.cpu.gen_registers[self.helper.operands[0].reg].value = 0"""
 
             case ida_allins.NN_test:
-                result = self.cpu.gen_registers[self.helper.operands[0].reg].value & oper_value
+                result = self.cpu.registers[self.helper.operands[0].reg].value & oper_value
 
             case ida_allins.NN_xor:
-                self.cpu.gen_registers[self.helper.operands[0].reg].value ^= oper_value
+                self.cpu.registers[self.helper.operands[0].reg].value ^= oper_value
 
             case default:
                 print(f'Unhandled mnemonic of const {hex(self.helper.inst_type)} @{self.ea:x}')
                 return False
 
         if not self.helper.inst_type == ida_allins.NN_sub:
-            result = self.cpu.gen_registers[self.helper.operands[0].reg].value
-        self.stack.top = self.cpu.reg_sp
-        self.stack.base = self.cpu.reg_bp
+            result = self.cpu.registers[self.helper.operands[0].reg].value
+        self.stack.top = self.cpu.reg_esp
+        self.stack.base = self.cpu.reg_ebp
         self.cpu.flags.update(result)
         print(self.__repr__())
         return True
@@ -748,7 +794,7 @@ class EmulationManager:
                     self.stack.add_data(StackData(oper_value, self.stack.last_index, size, self.stack.base - (start_address +  __INT__(self.helper.operands[0].addr).value), dt_type))
 
                 case ida_allins.NN_push:
-                    self.cpu.reg_sp          -= 0x4
+                    self.cpu.reg_esp          -= 0x4
                     self.stack.top           -= 0x4
                     self.stack.last_index     = self.stack.top
                     self.stack.top_stored_var = self.stack.top
@@ -756,7 +802,7 @@ class EmulationManager:
 
                 case ida_allins.NN_pop:
                     popped_stack_data: StackData = self.stack.data.pop(self.stack.top_stored_var)
-                    self.cpu.reg_sp             += 4
+                    self.cpu.reg_esp             += 4
                     self.stack.top              += 4
                     self.stack.last_index        = self.stack.top
                     self.stack.top_stored_var    = self.stack.top
@@ -768,7 +814,7 @@ class EmulationManager:
 
                 case ida_allins.NN_popa:
                     self.stack.last_index           = self.stack.top
-                    self.stack.top, self.cpu.reg_sp = self.stack.top + 0x14, self.cpu.reg_sp + 0x14
+                    self.stack.top, self.cpu.reg_esp = self.stack.top + 0x14, self.cpu.reg_esp + 0x14
 
 
                 case ida_allins.NN_pusha:
@@ -795,7 +841,7 @@ def main(e_manager: EmulationManager = EmulationManager(here()), jump_count:int 
     instruction: ida_ua.insn_t
     while True:
         print(f'{e_manager.ea:x}')
-        e_manager.cpu.gen_registers[procregs.eip.reg].value = e_manager.ea
+        e_manager.cpu.registers[procregs.eip.reg].value = e_manager.ea
         instruction                                        = DecodeInstruction(e_manager.ea)
         if jump_count >= __JUMP_LIMIT__: break
 
@@ -812,7 +858,7 @@ def main(e_manager: EmulationManager = EmulationManager(here()), jump_count:int 
         if e_manager.helper.is_stack_op():
             res = e_manager.handle_operation_stack(e_manager.extract_oper_value(0), e_manager.stack.top)
             if instruction.itype == ida_allins.NN_pop:
-                e_manager.cpu.gen_registers[instruction.Op1.reg].value = res
+                e_manager.cpu.registers[instruction.Op1.reg].value = res
             print(e_manager.cpu)
 
         elif e_manager.helper.is_comparative():
@@ -861,7 +907,7 @@ def main(e_manager: EmulationManager = EmulationManager(here()), jump_count:int 
         elif e_manager.helper.is_call_inst():
             print(f'[i] Called @{instruction.Op1.addr:x} from {instruction.ea:x}')
             if not e_manager.helper.are_skipped_instructions_junk():
-                e_manager.stack = e_manager.stack.create_called_frame(instruction.Op1.addr, e_manager.cpu.reg_bp, e_manager.cpu.reg_sp, instruction.ea + instruction.size)
+                e_manager.stack = e_manager.stack.create_called_frame(instruction.Op1.addr, e_manager.cpu.reg_ebp, e_manager.cpu.reg_esp, instruction.ea + instruction.size)
 
             if not e_manager.helper.handle_forward_movement():
                 print('[✕] Handle Forward Movement Failed! breaking the loop')
@@ -886,7 +932,7 @@ def main(e_manager: EmulationManager = EmulationManager(here()), jump_count:int 
                     case default:
                         jumpto(e_manager.ea)
                         break
-                new_index = e_manager.cpu.gen_registers[reg_const].value + __INT__(instruction.Op1.addr).value
+                new_index = e_manager.cpu.registers[reg_const].value + __INT__(instruction.Op1.addr).value
                 e_manager.handle_operation_stack(op_value, new_index)
 
             if not e_manager.handle_operation_cpu(op_value):
